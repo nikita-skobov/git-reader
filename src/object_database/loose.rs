@@ -1,7 +1,10 @@
 use crate::object_id::*;
-use crate::fs_helpers;
+use crate::{ioerr, fs_helpers, ioerre};
 use std::path::{Path, PathBuf};
 use std::{io, collections::HashMap, fs::DirEntry};
+use flate2::{Decompress, Status};
+use io::Read;
+use super::objects::ObjectType;
 
 /// A loose object is either unresolved, in which case
 /// it points to a file: 00/xyzdadadebebe that contains
@@ -11,7 +14,7 @@ use std::{io, collections::HashMap, fs::DirEntry};
 #[derive(Debug)]
 pub enum PartiallyResolvedLooseObject {
     Unresolved(PathBuf),
-    Resolved(Vec<u8>),
+    Resolved(ObjectType),
 }
 
 /// git objects directory can have many loose
@@ -42,8 +45,80 @@ impl PartiallyResolvedLooseMap {
         }
         Ok(PartiallyResolvedLooseMap { map })
     }
+
+    pub fn contains_oid(&self, oid: Oid) -> bool {
+        self.map.contains_key(&oid)
+    }
+
+    /// needs to be mutable in case the desired object exists in
+    /// the map, but is not resolved yet, so we need to resolve it.
+    /// returns an error if there was an error during the resolving process.
+    /// inside error is Option which is None if the desired object id does
+    /// not exist
+    pub fn get_object<'a>(&'a mut self, oid: Oid) -> io::Result<Option<&'a ObjectType>> {
+        match self.map.get_mut(&oid) {
+            None => Ok(None),
+            Some(partially_resolved) => match partially_resolved {
+                PartiallyResolvedLooseObject::Resolved(object_type) => Ok(Some(object_type)),
+                PartiallyResolvedLooseObject::Unresolved(path) => {
+                    let resolved_obj = read_object(path)?;
+                    *partially_resolved = PartiallyResolvedLooseObject::Resolved(resolved_obj);
+                    match partially_resolved {
+                        PartiallyResolvedLooseObject::Resolved(object_type) => Ok(Some(object_type)),
+                        _ => return ioerre!("Failed to insert resolved object for {}", oid),
+                    }
+                }
+            }
+        }
+    }
+
+    /// iterate all objects in map, and try to resolve each one.
+    /// returns an error if any of the resolutions fails.
+    pub fn resolve_all(&mut self) -> io::Result<()> {
+        let all_keys: Vec<Oid> = self.map.keys().map(|k| *k).collect();
+        for key in all_keys {
+            self.get_object(key)?;
+        }
+        Ok(())
+    }
 }
 
+pub fn read_object<P: AsRef<Path>>(path: P) -> io::Result<ObjectType> {
+    let mut file = fs_helpers::get_readonly_handle(&path)?;
+    // we expect a git object to contain a zlib header
+    let will_contain_zlib_header = true;
+    let mut decompressor = Decompress::new(will_contain_zlib_header);
+
+    // TODO: there is a way to read the first part of the
+    // zlib object, and then continue reading the rest of it...
+    // its a bit complicated for me atm, and I don't know if I
+    // really need that. Commit objects and tree objects
+    // should fit entirely within 2kb, and only blobs would
+    // potentially require more than 1kb to read entirely.
+    // In the future, this would need to be more robust
+    // if I want this library to be able to fully decode
+    // any object, but I mostly care about traversing
+    // the commit graph, and getting a list of all blobs in a commit.
+    let read_max = 2048;
+    let file_size = file.metadata()?.len() as usize;
+    let mut buf = if file_size > read_max {
+        vec![0; read_max]
+    } else {
+        vec![0; file_size]
+    };
+    file.read_exact(&mut buf).map_err(|e| ioerr!("Failed to read file {:?}\n{}", path.as_ref(), e))?;
+    let mut out = [0; 128];
+    decompressor.decompress(&buf, &mut out, flate2::FlushDecompress::None)?;
+
+    // we should now have the first 128 bytes
+    // of the decompressed object. This will contain the header
+    // which has format: `<type><space><size><0byte>`
+    // so we try to decode the header:
+    let obj_type = ObjectType::new(&out)
+        .ok_or(ioerr!("Failed to decode object header for {:?}", path.as_ref()))?;
+
+    Ok(obj_type)
+}
 
 #[inline(always)]
 pub fn filter_to_object_folder(
@@ -102,4 +177,17 @@ pub fn filter_to_object_folder(
         None
     });
     return Some(map_entries);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nonsense1() {
+        let obj1 = "../.git/objects/";
+        let mut loose_map = PartiallyResolvedLooseMap::from_path(obj1).unwrap();
+        loose_map.resolve_all().unwrap();
+        eprintln!("{:#?}", loose_map);
+    }
 }

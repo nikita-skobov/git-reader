@@ -1,10 +1,14 @@
 use std::{path::Path, io};
 
+pub mod objects;
+use objects::*;
+
 pub mod loose;
 use loose::*;
 
 pub mod packed;
 use packed::*;
+use crate::object_id::Oid;
 
 
 #[derive(Debug)]
@@ -27,5 +31,13 @@ impl ObjectDB {
             packs: get_vec_of_unresolved_packs(&canon_path)?,
         };
         Ok(odb)
+    }
+
+    pub fn find_object(&mut self, oid: Oid) {
+        // first search if this oid is in the loose objects map
+        if self.loose.contains_oid(oid) {
+            // return/resolve this object id
+            // either from memory, or from the file
+        }
     }
 }
