@@ -3,6 +3,7 @@ use std::{io, path::{Path, PathBuf}};
 mod repository;
 mod object_database;
 mod fs_helpers;
+mod index_file;
 
 /// returns the absolute path of the actual .git/ folder
 /// from your search path

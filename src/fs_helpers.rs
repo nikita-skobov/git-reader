@@ -1,5 +1,6 @@
 use std::{path::Path, fs, io};
-use fs::DirEntry;
+use fs::{OpenOptions, DirEntry};
+use memmap2::{Mmap, MmapOptions};
 
 pub fn search_folder<P, F, T>(
     path: P,
@@ -18,4 +19,14 @@ pub fn search_folder<P, F, T>(
         }
     }
     Ok(out)
+}
+
+
+pub fn get_mmapped_file<P: AsRef<Path>>(
+    path: P,
+) -> io::Result<Mmap> {
+    let file = OpenOptions::new().read(true)
+        .write(false).create(false).open(path)?;
+    let mmapped_file = unsafe { MmapOptions::new().map(&file)? };
+    Ok(mmapped_file)
 }
