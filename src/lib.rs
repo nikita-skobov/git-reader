@@ -4,6 +4,7 @@ mod repository;
 mod object_database;
 mod fs_helpers;
 mod index_file;
+mod object_id;
 
 /// returns the absolute path of the actual .git/ folder
 /// from your search path
