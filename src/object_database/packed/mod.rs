@@ -1,4 +1,4 @@
-use std::{fs::DirEntry, path::{Path, PathBuf}, io};
+use std::{fs::DirEntry, path::{Path}, io};
 use crate::fs_helpers;
 
 mod index;

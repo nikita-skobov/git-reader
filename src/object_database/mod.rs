@@ -1,11 +1,9 @@
-use std::{path::{Path, PathBuf}, collections::HashMap, fs::DirEntry, io};
-use crate::object_id::*;
-use crate::{ioerr, fs_helpers};
+use std::{path::Path, io};
 
-mod loose;
+pub mod loose;
 use loose::*;
 
-mod packed;
+pub mod packed;
 use packed::*;
 
 

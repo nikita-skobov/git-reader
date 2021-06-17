@@ -1,4 +1,4 @@
-use std::{path::{Path, PathBuf}, io::{self, Read}, fs::File, fs::OpenOptions, fmt::Debug};
+use std::{path::{Path, PathBuf}, io, fmt::Debug};
 use byteorder::{BigEndian, ByteOrder};
 use crate::{ioerre, fs_helpers};
 use memmap2::Mmap;
