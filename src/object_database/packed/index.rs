@@ -2,6 +2,7 @@ use std::{path::{Path, PathBuf}, io, fmt::Debug};
 use byteorder::{BigEndian, ByteOrder};
 use crate::{ioerre, fs_helpers};
 use memmap2::Mmap;
+use super::PartiallyResolvedPackFile;
 
 /// see: https://git-scm.com/docs/pack-format#_version_2_pack_idx_files_support_packs_larger_than_4_gib_and
 pub const V2_IDX_SIGNATURE: [u8; 4] = [255, b't', b'O', b'c'];
@@ -33,6 +34,7 @@ pub struct IDXFile {
     pub version: IDXVersion,
     pub num_objects: u32,
     pub mmapped_file: Mmap,
+    pub pack: PartiallyResolvedPackFile,
 }
 
 /// We implement debug manually because we
@@ -59,10 +61,15 @@ pub enum IDXVersion {
 pub fn open_idx_file<P: AsRef<Path>>(
     path: P
 ) -> io::Result<IDXFile> {
+    let idx_file_path = path.as_ref().to_path_buf();
+    let pack_file_path = idx_file_path.with_extension("pack");
+    if !pack_file_path.is_file() {
+        return ioerre!("Failed to find corresponding pack file: {:?}", pack_file_path);
+    }
     let mmapped = fs_helpers::get_mmapped_file(path)?;
     let idx_size = mmapped.len();
     if idx_size < MINIMAL_IDX_FILE_SIZE {
-        return  ioerre!("IDX file is too small to be a valid idx file");
+        return ioerre!("IDX file is too small to be a valid idx file");
     }
     let v2_idx_sig_len = V2_IDX_SIGNATURE.len();
     let version = if &mmapped[0..v2_idx_sig_len] == V2_IDX_SIGNATURE {
@@ -98,7 +105,8 @@ pub fn open_idx_file<P: AsRef<Path>>(
         fanout_table,
         version,
         num_objects,
-        mmapped_file: mmapped,  
+        mmapped_file: mmapped,
+        pack: PartiallyResolvedPackFile::Unresolved(pack_file_path),
     };
     Ok(idxfile)
 }
