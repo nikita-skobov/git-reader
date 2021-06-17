@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 pub enum PartiallyResolvedPackFile {
     Unresolved(PathBuf),
-    Resolved(PathBuf),
+    Resolved(PackFile),
 }
 
 pub struct PackFile {
