@@ -206,15 +206,22 @@ pub fn read_raw_object<P: AsRef<Path>>(
     // decompressing it from where we left off:
     // to do so, we need to first resize our output
     // buffer to be the exact size that we expect to put into it.
-    // it should be the size of the header + the size of the contents
-    // that we decoded from the header:
-    let mut output_buffer = first_read_info.decompressed_buf.to_vec();
-    let desired_output_buffer_len = first_read_info.payload_starts_at + first_read_info.payload_size;
-    output_buffer.resize(desired_output_buffer_len, 0);
+    // it should be the size of the payload that we decoded from the header
+    let output_buffer = first_read_info.decompressed_buf;
+    let desired_output_buffer_len = first_read_info.payload_size;
+    let mut desired_out = vec![0; desired_output_buffer_len];
+    // because the original output buffer might have some data in it other
+    // than the header, we want to copy that to the beginning of this new output
+    // buffer.
+    let desired_data_starts_at = first_read_info.payload_starts_at;
+    let desired_bytes = output_buffer.len() - desired_data_starts_at;
+    let desired_slice_to_copy = &first_read_info.decompressed_buf[desired_data_starts_at..];
+    desired_out[0..desired_bytes].copy_from_slice(desired_slice_to_copy);
+    let mut output_buffer = desired_out;
 
     let mut decompressor = first_read_info.decompressor;
     let bytes_input = decompressor.total_in() as usize;
-    let bytes_out = decompressor.total_out() as usize;
+    let bytes_out = decompressor.total_out() as usize - desired_data_starts_at;
     // TODO: need to check if the first read somehow read through the
     // entirety of the buffer... this is highly unlikely...
     let next_state = decompressor.decompress(
