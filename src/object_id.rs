@@ -41,6 +41,25 @@ pub fn oid_str_truncated_to_oid(oid_str: OidStrTruncated) -> io::Result<Oid> {
     Ok(oid)
 }
 
+pub fn get_partial_oid_from_hash(hash: &str) -> io::Result<Oid> {
+    let hash_len = hash.len();
+    let oid_str = if hash_len < 32 {
+        // not enough bytes, so we need to add 0s to
+        // the end:
+        let mut oid_str = OidStrTruncated::default();
+        oid_str[0..hash_len].copy_from_slice(&hash[..].as_bytes());
+        let zeros = vec![b'0'; 32 - hash_len];
+        oid_str[hash_len..].copy_from_slice(&zeros[..]);
+        oid_str
+    } else {
+        // we have enough bytes, copy the entire 32
+        let mut oid_str = OidStrTruncated::default();
+        oid_str[..].copy_from_slice(&hash[0..32].as_bytes());
+        oid_str
+    };
+    oid_str_truncated_to_oid(oid_str)
+}
+
 pub fn hash_str_to_oid(hash: &str) -> io::Result<Oid> {
     let trunc_str = hash.get(0..32)
         .ok_or_else(|| ioerr!("Your hash '{}' must be at least 32 hex chars long", hash))?;

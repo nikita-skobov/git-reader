@@ -84,6 +84,19 @@ impl<T: Resolve> PartiallyResolvedLooseMap<T> {
         }
         Ok(())
     }
+
+    /// iterate all Oid keys and return which key matches
+    /// your partial id. returns None if no match found
+    pub fn try_find_match_from_partial(&self, partial_oid: Oid) -> Option<Oid> {
+        for key in self.map.keys() {
+            let key = *key;
+            if key & partial_oid == partial_oid {
+                return Some(key);
+            }
+        }
+
+        None
+    }
 }
 
 #[inline(always)]
