@@ -1,73 +1,8 @@
-
-use crate::{fs_helpers, object_id::Oid, ioerr, ioerre};
+use crate::{fs_helpers, ioerr, ioerre};
 use std::{io, path::Path, fs::File, fmt::Debug, str::FromStr};
 use flate2::{Decompress, Status, FlushDecompress};
 use io::{BufRead, Read};
-
-/// TODO: finish parsing
-#[derive(Debug)]
-pub struct BlobObject {
-
-}
-
-/// TODO: finish parsing
-#[derive(Debug)]
-pub struct TagObject {
-
-}
-
-/// TODO: finish parsing
-#[derive(Debug)]
-pub struct TreeObject {
-
-}
-
-#[derive(Debug, Default)]
-pub struct CommitObject {
-    pub parents: Vec<Oid>,
-    // TODO: need to parse commit message,
-    // commit tree/blob structure...
-}
-
-/// Each object type variant contains
-/// the size of that object, and
-/// then the actual struct of that object
-#[derive(Debug)]
-pub enum ObjectType {
-    Tree(TreeObject),
-    Blob(BlobObject),
-    Commit(CommitObject),
-    Tag(TagObject),
-}
-
-#[derive(Debug, PartialOrd, PartialEq)]
-pub enum UnparsedObjectType {
-    Tree,
-    Blob,
-    Commit,
-    Tag,
-}
-
-impl FromStr for UnparsedObjectType {
-    type Err = io::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let objtype = match s {
-            "tree" => UnparsedObjectType::Tree,
-            "tag" => UnparsedObjectType::Tag,
-            "commit" => UnparsedObjectType::Commit,
-            "blob" => UnparsedObjectType::Blob,
-            _ => { return ioerre!("Failed to parse object type of '{}'", s); },
-        };
-        Ok(objtype)
-    }
-}
-
-#[derive(Debug)]
-pub struct UnparsedObject {
-    pub object_type: UnparsedObjectType,
-    pub payload: Vec<u8>,
-}
+use super::{UnparsedObject, UnparsedObjectType};
 
 /// returns the type of object, the size of the actual decompressed object
 /// (the value the object header), and the index of where the
@@ -287,16 +222,4 @@ pub fn read_raw_object<P: AsRef<Path>>(
         // TODO: this includes the header, which we dont want usually...
         payload: output_buffer,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn nonsense3() {
-        let path = "../.git/objects/2d/f9f3d514bd85575bd848e7bfedc6375f414cd9";
-        let raw_obj = read_raw_object(path, false).unwrap();
-        std::fs::write("testfile1_2df9f3d.txt", &raw_obj.payload).unwrap();
-    }
 }

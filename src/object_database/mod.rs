@@ -1,17 +1,11 @@
 use std::{path::Path, io};
-
-pub mod commit_object_parsing;
-pub mod tree_object_parsing;
-
-pub mod objects;
-use objects::*;
+use crate::object_id::Oid;
 
 pub mod loose;
 use loose::*;
 
 pub mod packed;
 use packed::*;
-use crate::object_id::Oid;
 
 
 #[derive(Debug)]

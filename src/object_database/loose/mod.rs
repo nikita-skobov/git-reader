@@ -2,18 +2,14 @@ use crate::object_id::*;
 use crate::{fs_helpers, ioerre};
 use std::path::{Path, PathBuf};
 use std::{io, collections::HashMap, fs::DirEntry};
-use super::objects::{UnparsedObject, ObjectType, read_raw_object};
 
-/// A loose object is either unresolved, in which case
-/// it points to a file: 00/xyzdadadebebe that contains
-/// the actual object, and we can read that file, and then
-/// turn this into a resolved loose object, which has
-/// the data loaded into memory.
-#[derive(Debug)]
-pub enum PartiallyResolvedLooseObject {
-    Unresolved(PathBuf),
-    Resolved(UnparsedObject),
-}
+pub mod parsed;
+pub use parsed::*;
+
+pub mod unparsed;
+pub use unparsed::*;
+
+
 
 /// git objects directory can have many loose
 /// objects, where the first 2 characters of the sha hash
@@ -144,7 +140,7 @@ pub fn filter_to_object_folder(
 mod tests {
     use super::*;
 
-    #[test]
+    // #[test]
     fn nonsense1() {
         let obj1 = "../.git/objects/";
         let mut loose_map = PartiallyResolvedLooseMap::from_path(obj1).unwrap();

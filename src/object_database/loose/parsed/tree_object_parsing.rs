@@ -21,6 +21,19 @@ pub enum TreeMode {
     GitLink,
 }
 
+impl AsRef<str> for TreeMode {
+    fn as_ref(&self) -> &str {
+        match self {
+            TreeMode::Directory => "040000",
+            TreeMode::RegularNonEx => "100644",
+            TreeMode::RegularNonExGroupWrite => "100664",
+            TreeMode::RegularEx => "100755",
+            TreeMode::SymLink => "120000",
+            TreeMode::GitLink => "160000",
+        }
+    }
+}
+
 impl Default for TreeMode {
     fn default() -> Self {
         TreeMode::Directory
