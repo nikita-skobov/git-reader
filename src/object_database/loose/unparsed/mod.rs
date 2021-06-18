@@ -1,5 +1,6 @@
 use std::{io, str::FromStr, path::PathBuf};
 use crate::ioerre;
+use super::Resolve;
 
 pub mod decode;
 pub use decode::*;
@@ -44,6 +45,27 @@ pub struct UnparsedObject {
     pub payload: Vec<u8>,
 }
 
+impl Resolve for PartiallyResolvedLooseObject {
+    type Object = UnparsedObject;
+
+    fn unresolved(p: PathBuf) -> Self {
+        PartiallyResolvedLooseObject::Unresolved(p)
+    }
+
+    fn resolve_or_return(&mut self) -> io::Result<Option<&Self::Object>> {
+        match self {
+            PartiallyResolvedLooseObject::Resolved(object_type) => Ok(Some(object_type)),
+            PartiallyResolvedLooseObject::Unresolved(path) => {
+                let resolved_obj = read_raw_object(path, false)?;
+                *self = PartiallyResolvedLooseObject::Resolved(resolved_obj);
+                match self {
+                    PartiallyResolvedLooseObject::Resolved(object_type) => Ok(Some(object_type)),
+                    _ => return ioerre!("Failed to insert resolved object"),
+                }
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

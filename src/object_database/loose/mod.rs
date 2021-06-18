@@ -9,7 +9,11 @@ pub use parsed::*;
 pub mod unparsed;
 pub use unparsed::*;
 
-
+pub trait Resolve {
+    type Object;
+    fn unresolved(p: PathBuf) -> Self;
+    fn resolve_or_return(&mut self) -> io::Result<Option<&Self::Object>>;
+}
 
 /// git objects directory can have many loose
 /// objects, where the first 2 characters of the sha hash
@@ -18,26 +22,33 @@ pub use unparsed::*;
 /// This partially resolved loose map contains
 /// a hash map of each of those sha hashes (first 2 chars of
 /// folder name combined with file names within that folder),
-/// and the value is an enum that is either the full object file
-/// read into memory, or the path of that file that is ready to be
-/// read.
-#[derive(Debug)]
-pub struct PartiallyResolvedLooseMap {
-    pub map: HashMap<Oid, PartiallyResolvedLooseObject>,
+/// and the value is an enum that is either the pathbuf to that file
+/// or a resolved and potentially parsed object. type parameter T
+/// determined what gets stored here. If you use:
+/// `T = PartiallyResolvedLooseObject` then we store the raw data
+/// without parsing, but if you use: `T = PartiallyParsedLooseObject`
+/// then when we resolve the object file, we parse it fully and store
+/// the parsed object. The parsing for commit objects can be further
+/// fine tuned in the type parameter of the `PartiallyParsedLooseObject`
+/// enum, ie: you can parse a commit fully, or just parse the tree/parents,
+/// etc..
+pub struct PartiallyResolvedLooseMap<T: Resolve> {
+    pub map: HashMap<Oid, T>,
 }
 
-impl PartiallyResolvedLooseMap {
+impl<T: Resolve> PartiallyResolvedLooseMap<T> {
     /// the given path should be the absolute path to the folder that contains
     /// all of the loose object folders, ie: /.../.git/objects/
-    pub fn from_path<P: AsRef<Path>>(path: P) -> io::Result<PartiallyResolvedLooseMap> {
+    pub fn from_path<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         let entries = fs_helpers::search_folder(path, filter_to_object_folder)?;
         let mut map = HashMap::new();
         for e in entries {
             for (hash, filepath) in e {
-                map.insert(hash, PartiallyResolvedLooseObject::Unresolved(filepath));
+                let unresolved = T::unresolved(filepath);
+                map.insert(hash, unresolved);
             }
         }
-        Ok(PartiallyResolvedLooseMap { map })
+        Ok(Self { map })
     }
 
     pub fn contains_oid(&self, oid: Oid) -> bool {
@@ -49,20 +60,10 @@ impl PartiallyResolvedLooseMap {
     /// returns an error if there was an error during the resolving process.
     /// inside error is Option which is None if the desired object id does
     /// not exist
-    pub fn get_object<'a>(&'a mut self, oid: Oid) -> io::Result<Option<&'a UnparsedObject>> {
+    pub fn get_object<'a>(&'a mut self, oid: Oid) -> io::Result<Option<&'a T::Object>> {
         match self.map.get_mut(&oid) {
             None => Ok(None),
-            Some(partially_resolved) => match partially_resolved {
-                PartiallyResolvedLooseObject::Resolved(object_type) => Ok(Some(object_type)),
-                PartiallyResolvedLooseObject::Unresolved(path) => {
-                    let resolved_obj = read_raw_object(path, false)?;
-                    *partially_resolved = PartiallyResolvedLooseObject::Resolved(resolved_obj);
-                    match partially_resolved {
-                        PartiallyResolvedLooseObject::Resolved(object_type) => Ok(Some(object_type)),
-                        _ => return ioerre!("Failed to insert resolved object for {}", oid),
-                    }
-                }
-            }
+            Some(partially_resolved) => partially_resolved.resolve_or_return()
         }
     }
 
@@ -134,17 +135,4 @@ pub fn filter_to_object_folder(
         None
     });
     return Some(map_entries);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // #[test]
-    fn nonsense1() {
-        let obj1 = "../.git/objects/";
-        let mut loose_map = PartiallyResolvedLooseMap::from_path(obj1).unwrap();
-        loose_map.resolve_all().unwrap();
-        eprintln!("{:#?}", loose_map);
-    }
 }
