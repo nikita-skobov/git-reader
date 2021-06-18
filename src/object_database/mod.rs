@@ -1,5 +1,5 @@
 use std::{path::Path, io};
-use crate::object_id::Oid;
+use crate::{ioerre, object_id::Oid};
 
 pub mod loose;
 use loose::*;
@@ -44,11 +44,32 @@ impl<T: Resolve> ObjectDB<T> {
         Ok(odb)
     }
 
-    pub fn find_object(&mut self, oid: Oid) {
+    /// get the object if we already resolved it,
+    /// and if not, we will resolve it which is why we need to be
+    /// mutable
+    pub fn get_object_mut<'a>(&'a mut self, oid: Oid) -> io::Result<&'a T::Object> {
         // first search if this oid is in the loose objects map
-        if self.loose.contains_oid(oid) {
-            // return/resolve this object id
-            // either from memory, or from the file
+        let obj_in_loose = self.loose.get_object(oid)?;
+        match obj_in_loose {
+            Some(obj) => Ok(obj),
+            None => {
+                return ioerre!("Oid: {} not found. TODO: need to implement searching through pack file", oid);
+            }
+        }
+    }
+
+    /// get an object if it exists. We cannot resolve here
+    /// because we are not mutable, so objects being not resolved
+    /// is the same as them not existing... only use this
+    /// if you resolved all objects ahead of time.
+    pub fn get_object<'a>(&'a self, oid: Oid) -> io::Result<&'a T::Object> {
+        // first search if this oid is in the loose objects map
+        let obj_in_loose = self.loose.get_object_existing(oid)?;
+        match obj_in_loose {
+            Some(obj) => Ok(obj),
+            None => {
+                return ioerre!("Oid: {} not found. TODO: need to implement searching through pack file", oid);
+            }
         }
     }
 }
