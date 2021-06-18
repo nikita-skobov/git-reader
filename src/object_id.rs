@@ -35,10 +35,16 @@ pub fn hex_u128_to_str(h: Oid) -> String {
     format!("{}{}", prepend_0s, hash_str)
 }
 
-pub fn oid_full_to_string(h: OidFull) -> io::Result<String> {
-    let hex_str = std::str::from_utf8(&h)
-        .map_err(|e| ioerr!("{}", e))?;
-    Ok(hex_str.to_string())
+/// Not very well optimized, I know, but we only need
+/// to print full hex strings for debugging purposes probably
+pub fn oid_full_to_string(h: OidFull) -> String {
+    let mut s = String::with_capacity(40);
+    for byte in h.iter() {
+        let byte = *byte;
+        let hex_str = format!("{:02x}", byte);
+        s.push_str(&hex_str);
+    }
+    s
 }
 
 pub fn oid_str_truncated_to_oid(oid_str: OidStrTruncated) -> io::Result<Oid> {
