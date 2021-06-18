@@ -1,6 +1,7 @@
 use std::{path::Path, io};
 
 pub mod commit_object_parsing;
+pub mod tree_object_parsing;
 
 pub mod objects;
 use objects::*;
