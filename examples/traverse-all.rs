@@ -11,7 +11,7 @@ pub fn main() {
     };
 
     let right_now = std::time::Instant::now();
-    let mut odb = match object_database::ObjectDB::new(first) {
+    let mut odb = match object_database::UnparsedObjectDB::new(first) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("Failed to create object DB: {}", e);
