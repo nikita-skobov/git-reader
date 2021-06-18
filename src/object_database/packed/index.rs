@@ -1,6 +1,6 @@
 use std::{path::{Path, PathBuf}, io, fmt::Debug};
 use byteorder::{BigEndian, ByteOrder};
-use crate::{ioerre, fs_helpers};
+use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_oid_to_u128_oid, full_slice_oid_to_u128_oid}, ioerr};
 use memmap2::Mmap;
 use super::PartiallyResolvedPackFile;
 
@@ -15,6 +15,8 @@ pub const SHA1_SIZE: usize = 20;
 /// according to docs, it looks like trailer is just 2 checksums?
 pub const IDX_TRAILER_SIZE: usize = SHA1_SIZE * 2;
 pub const MINIMAL_IDX_FILE_SIZE: usize = IDX_TRAILER_SIZE + FANOUT_LENGTH * FANOUT_ENTRY_SIZE;
+const V1_HEADER_SIZE: usize = FANOUT_LENGTH * FANOUT_ENTRY_SIZE;
+const V2_HEADER_SIZE: usize = FANOUT_ENTRY_SIZE * 2 + FANOUT_LENGTH * FANOUT_ENTRY_SIZE;
 
 
 #[derive(Debug)]
@@ -46,6 +48,43 @@ impl Debug for IDXFile {
             .field("num_objects", &self.num_objects)
             .field("version", &self.version)
             .finish()
+    }
+}
+
+impl IDXFile {
+    pub fn find_packfile_index_for(&self, oid: Oid) -> io::Result<Option<usize>> {
+        let first_byte = get_first_byte_of_oid(oid) as usize;
+        let mut start_search = if first_byte > 0 {
+            self.fanout_table[first_byte - 1]
+        } else {
+            0
+        } as usize;
+        let mut end_search = self.fanout_table[first_byte] as usize;
+
+        while start_search < end_search {
+            let mid = (start_search + end_search) / 2;
+            let mid_id = self.get_oid_at_index(mid)
+                .ok_or_else(|| ioerr!("Invalid index for idx file: {}", mid))?;
+            if oid < mid_id {
+                end_search = mid;
+            } else if oid > mid_id {
+                return Ok(Some(mid))
+            } else {
+                start_search = mid + 1;
+            }
+        }
+
+        Ok(None)
+    }
+
+    pub fn get_oid_at_index(&self, index: usize) -> Option<Oid> {
+        let start = match self.version {
+            IDXVersion::V2 => V2_HEADER_SIZE + index * SHA1_SIZE,
+            IDXVersion::V1 => V1_HEADER_SIZE + index * (FANOUT_ENTRY_SIZE + SHA1_SIZE) + FANOUT_ENTRY_SIZE,
+        };
+        let desired_range = start..start + SHA1_SIZE;
+        let full_sha = self.mmapped_file.get(desired_range)?;
+        Some(full_slice_oid_to_u128_oid(full_sha))
     }
 }
 

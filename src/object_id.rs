@@ -98,6 +98,12 @@ pub fn full_oid_to_u128_oid(full: OidFull) -> Oid {
     trunc_oid_to_u128_oid(trunc)
 }
 
+/// Only call this if you know your slice has at least 16 bytes
+pub fn full_slice_oid_to_u128_oid(full: &[u8]) -> Oid {
+    let mut trunc = OidTruncated::default();
+    trunc.copy_from_slice(&full[0..16]);
+    trunc_oid_to_u128_oid(trunc)
+}
 
 #[cfg(test)]
 mod tests {
