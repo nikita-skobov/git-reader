@@ -73,4 +73,11 @@ impl<T: ParseCommit> Resolve for PartiallyParsedLooseObject<T> {
             }
         }
     }
+
+    fn return_if_resolved(&self) -> std::io::Result<Option<&Self::Object>> {
+        match self {
+            PartiallyParsedLooseObject::Parsed(obj) => Ok(Some(obj)),
+            PartiallyParsedLooseObject::Unresolved(_) => Ok(None)
+        }
+    }
 }

@@ -21,6 +21,24 @@ pub enum TreeMode {
     GitLink,
 }
 
+impl TreeMode {
+    pub fn is_blob(&self) -> bool {
+        match self {
+            TreeMode::Directory => false,
+            TreeMode::RegularNonEx |
+            TreeMode::RegularNonExGroupWrite |
+            TreeMode::RegularEx |
+            TreeMode::SymLink => {
+                true
+            }
+            // TODO: get rid of panic once you find out...
+            TreeMode::GitLink => {
+                panic!("I DONT KNOW IF A GITLINK IS A BLOB OR NOT");
+            }
+        }
+    }
+}
+
 impl AsRef<str> for TreeMode {
     fn as_ref(&self) -> &str {
         match self {

@@ -13,6 +13,7 @@ pub trait Resolve {
     type Object;
     fn unresolved(p: PathBuf) -> Self;
     fn resolve_or_return(&mut self) -> io::Result<Option<&Self::Object>>;
+    fn return_if_resolved(&self) -> io::Result<Option<&Self::Object>>;
 }
 
 /// git objects directory can have many loose
@@ -72,6 +73,13 @@ impl<T: Resolve> PartiallyResolvedLooseMap<T> {
         match self.map.get_mut(&oid) {
             None => Ok(None),
             Some(partially_resolved) => partially_resolved.resolve_or_return()
+        }
+    }
+
+    pub fn get_object_existing<'a>(&'a self, oid: Oid) -> io::Result<Option<&'a T::Object>> {
+        match self.map.get(&oid) {
+            None => Ok(None),
+            Some(partially_resolved) => partially_resolved.return_if_resolved()
         }
     }
 

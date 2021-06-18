@@ -65,6 +65,13 @@ impl Resolve for PartiallyResolvedLooseObject {
             }
         }
     }
+
+    fn return_if_resolved(&self) -> io::Result<Option<&Self::Object>> {
+        match self {
+            PartiallyResolvedLooseObject::Resolved(object_type) => Ok(Some(object_type)),
+            PartiallyResolvedLooseObject::Unresolved(path) => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]
