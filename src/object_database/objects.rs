@@ -256,19 +256,23 @@ pub fn read_raw_object<P: AsRef<Path>>(
     let output_buffer = first_read_info.decompressed_buf;
     let desired_output_buffer_len = first_read_info.payload_size;
     let mut desired_out = vec![0; desired_output_buffer_len];
+    let bytes_read_out_so_far = first_read_info.decompressor.total_out() as usize;
     // because the original output buffer might have some data in it other
     // than the header, we want to copy that to the beginning of this new output
     // buffer.
     let desired_data_starts_at = first_read_info.payload_starts_at;
-    let desired_bytes = output_buffer.len() - desired_data_starts_at;
-    let desired_slice_to_copy = &first_read_info.decompressed_buf[desired_data_starts_at..];
+    let desired_bytes = bytes_read_out_so_far - desired_data_starts_at;
+    let desired_slice_to_copy = &output_buffer[desired_data_starts_at..bytes_read_out_so_far];
+    // eprintln!("Decompressed so far: {}", bytes_read_out_so_far);
+    // eprintln!("Desired bytes: {}", desired_bytes);
+    // eprintln!("Desired slice len: {}", desired_slice_to_copy.len());
+    // eprintln!("Desired output len: {}", desired_out.len());
     desired_out[0..desired_bytes].copy_from_slice(desired_slice_to_copy);
     let mut output_buffer = desired_out;
-
     let mut decompressor = first_read_info.decompressor;
     let bytes_input = decompressor.total_in() as usize;
-    let bytes_out = decompressor.total_out() as usize - desired_data_starts_at;
-    
+    let bytes_out = bytes_read_out_so_far - desired_data_starts_at;
+
     // I think you're supposed to check if the state of the first
     // decompression is StreamEnd, but I think that is impossible if we pass in
     // an output buffer of 128 bytes?
