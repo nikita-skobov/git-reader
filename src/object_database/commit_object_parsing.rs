@@ -1,24 +1,17 @@
 use crate::{ioerre, object_id::{Oid}, ioerr};
 use std::io;
 
-pub enum ParseState {
-    Tree,
-    Parents,
-    Author,
-    Committer,
-    Message,
+pub trait ParseCommit {
+    fn parse_inner(
+        raw: &[u8],
+        current_index: &mut usize
+    ) -> io::Result<Self> where Self: Sized;
+
+    fn parse(raw: &[u8]) -> io::Result<Self> where Self: Sized {
+        let mut index = 0;
+        Self::parse_inner(raw, &mut index)
+    }
 }
-
-// TODO: use a trait
-// where each of the commit objects implements parse...
-// pub trait ParseCommit {
-//     fn parse_inner<T: ParseCommit>(raw: &[u8], current_index: &mut usize) -> io::Result<T>;
-
-//     fn parse<T: ParseCommit>(raw: &[u8]) -> io::Result<T> {
-//         let mut index = 0;
-//         T::parse_inner(raw, &mut index)
-//     }
-// }
 
 /// The reason we use `parent_one`, `parent_two`
 /// and then have a seperate `extra_parents` vec
@@ -56,13 +49,11 @@ pub struct CommitOnlyTreeAndParents {
     pub extra_parents: Vec<Oid>,
 }
 
-impl CommitOnlyTreeAndParents {
-    pub fn parse(raw: &[u8]) -> io::Result<Self> {
-        let mut curr_index = 0;
-        CommitOnlyTreeAndParents::parse_inner(raw, &mut curr_index)
-    }
-
-    pub fn parse_inner(raw: &[u8], curr: &mut usize) -> io::Result<Self> {
+impl ParseCommit for CommitOnlyTreeAndParents {
+    fn parse_inner(
+        raw: &[u8],
+        curr: &mut usize
+    ) -> io::Result<Self> where Self: Sized {
         let mut out = Self::default();
         let (tree_id, next_index) = parse_tree(raw)?;
         out.tree = tree_id;
