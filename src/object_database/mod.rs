@@ -1,5 +1,7 @@
 use std::{path::Path, io};
 
+pub mod commit_object_parsing;
+
 pub mod objects;
 use objects::*;
 
@@ -13,12 +15,12 @@ use crate::object_id::Oid;
 
 #[derive(Debug)]
 pub struct ObjectDB {
-    loose: PartiallyResolvedLooseMap,
+    pub loose: PartiallyResolvedLooseMap,
     /// I am not sure if there is any significance to the sha hash
     /// of the *.pack files themselves, and as such I don't think
     /// we need to look them up? As such they will be put into a vec
     /// instead of a map.
-    packs: Vec<PartiallyResolvedPackAndIndex>,
+    pub packs: Vec<PartiallyResolvedPackAndIndex>,
 }
 
 impl ObjectDB {
