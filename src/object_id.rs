@@ -41,6 +41,14 @@ pub fn oid_str_truncated_to_oid(oid_str: OidStrTruncated) -> io::Result<Oid> {
     Ok(oid)
 }
 
+pub fn get_first_byte_of_oid(oid: Oid) -> u8 {
+    let mask: u128 = 0xff_00_00_00_00_00_00_00_00_00_00_00_00_00_00_00;
+    let masked = oid & mask;
+    // shift 120 bits because we want the 8 bits
+    // that are in the MSB position
+    (masked >> 120) as u8
+}
+
 pub fn get_partial_oid_from_hash(hash: &str) -> io::Result<Oid> {
     let hash_len = hash.len();
     let oid_str = if hash_len < 32 {
@@ -116,5 +124,14 @@ mod tests {
         let expected_hex_str = "ffffffffffffffffffffffffffffffff";
         let hex_str = hex_u128_to_str(hash);
         assert_eq!(hex_str, expected_hex_str);
+    }
+
+    #[test]
+    fn getting_first_byte_works() {
+        let oid_str = "aaf00000000000000000000000000000";
+        let oid = hash_str_to_oid(oid_str).unwrap();
+        let first_byte = get_first_byte_of_oid(oid);
+        // aa == 170
+        assert_eq!(first_byte, 170);
     }
 }
