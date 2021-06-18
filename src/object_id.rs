@@ -35,7 +35,13 @@ pub fn hex_u128_to_str(h: Oid) -> String {
     format!("{}{}", prepend_0s, hash_str)
 }
 
-pub fn hash_object_file_and_folder(folder: &str, filename: &str) -> io::Result<u128> {
+pub fn oid_str_truncated_to_oid(oid_str: OidStrTruncated) -> io::Result<Oid> {
+    let oid_str = std::str::from_utf8(&oid_str).map_err(|e| ioerr!("{}", e))?;
+    let oid = Oid::from_str_radix(oid_str, 16).map_err(|e| ioerr!("{}", e))?;
+    Ok(oid)
+}
+
+pub fn hash_object_file_and_folder(folder: &str, filename: &str) -> io::Result<Oid> {
     let mut oid_str = OidStrTruncated::default();
     oid_str[0..2].copy_from_slice(&folder[0..2].as_bytes());
     oid_str[2..32].copy_from_slice(&filename[0..30].as_bytes());
