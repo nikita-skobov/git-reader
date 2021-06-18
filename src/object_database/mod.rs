@@ -88,8 +88,16 @@ impl<T: Resolve> ObjectDB<T> {
             let has_index = idx.find_index_for(oid)?;
             if let Some(index) = has_index {
                 let idx_id_str = oid_full_to_string(idx.id);
-                eprintln!("Found {:0x} in {}", oid, idx_id_str);
+                eprintln!("Found {:0x} in {} @ index {}", oid, idx_id_str, index);
                 // TODO: what to do if we find it?
+                if let Some(i) = idx.find_packfile_index_for(index) {
+                    eprintln!("It should have a packfile offset of {}", i);
+                } else {
+                    eprintln!("Failed to find packfile index offset...");
+                }
+            } else {
+                let idx_id_str = oid_full_to_string(idx.id);
+                eprintln!("Not found in: {}", idx_id_str);
             }
         }
 
