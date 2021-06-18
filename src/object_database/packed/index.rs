@@ -1,6 +1,6 @@
 use std::{path::{Path, PathBuf}, io, fmt::Debug, mem::size_of};
 use byteorder::{BigEndian, ByteOrder};
-use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_oid_to_u128_oid, full_slice_oid_to_u128_oid}, ioerr};
+use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_oid_to_u128_oid, full_slice_oid_to_u128_oid, full_oid_from_str}, ioerr};
 use memmap2::Mmap;
 use super::PartiallyResolvedPackFile;
 
@@ -35,6 +35,9 @@ pub enum PartiallyResolvedPackAndIndex {
 
 pub struct IDXFile {
     pub fanout_table: [u32; 256],
+    // this is the name of the index file.
+    // we don't need this other than for debugging purposes..
+    pub id: OidFull,
     pub version: IDXVersion,
     pub num_objects: u32,
     pub mmapped_file: Mmap,
@@ -188,9 +191,22 @@ pub fn open_idx_file<P: AsRef<Path>>(
     fill_fan(&mut fanout_table, data);
     let num_objects = fanout_table[FANOUT_LENGTH - 1];
 
+    let idx_file_name = idx_file_path.file_name()
+        .ok_or_else(|| ioerr!("Failed to read filename of idx file: {:?}", idx_file_path))?;
+    let idx_file_name = idx_file_name.to_str()
+        .ok_or_else(|| ioerr!("Failed to read filename of idx file: {:?}", idx_file_path))?;
+    // the 40 hex char hash should be
+    // between the 5th and 45th character:
+    // pack-{40 hex chars}.idx
+    let idx_pack_hash = idx_file_name.get(5..45)
+        .ok_or_else(|| ioerr!("Failed to parse idx file name: {:?}", idx_file_name))?;
+    let idx_pack_id = full_oid_from_str(idx_pack_hash)
+        .ok_or_else(|| ioerr!("Failed to parse idx file name into a sha1 hash: {:?}", idx_file_name))?;
+
     let idxfile = IDXFile {
         fanout_table,
         version,
+        id: idx_pack_id,
         num_objects,
         mmapped_file: mmapped,
         pack: PartiallyResolvedPackFile::Unresolved(pack_file_path),

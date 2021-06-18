@@ -49,6 +49,21 @@ pub fn get_first_byte_of_oid(oid: Oid) -> u8 {
     (masked >> 120) as u8
 }
 
+pub fn full_oid_from_str(hash: &str) -> Option<OidFull> {
+    let first_40 = hash.get(0..40)?;
+    let mut oid_full = OidFull::default();
+    for i in 0..20 {
+        // this should give us 2 characters at a time:
+        let hex_range_start = i * 2;
+        let hex_range = hex_range_start..(hex_range_start + 2);
+        let hex = &first_40[hex_range];
+        // now we parse those 2 hex chars into a u8:
+        let byte = u8::from_str_radix(hex, 16).ok()?;
+        oid_full[i] = byte;
+    }
+    Some(oid_full)
+}
+
 pub fn get_partial_oid_from_hash(hash: &str) -> io::Result<Oid> {
     let hash_len = hash.len();
     let oid_str = if hash_len < 32 {
