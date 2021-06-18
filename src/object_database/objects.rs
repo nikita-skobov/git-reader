@@ -2,7 +2,7 @@
 use crate::{fs_helpers, object_id::Oid, ioerr, ioerre};
 use std::{io, path::Path, fs::File, fmt::Debug, str::FromStr};
 use flate2::{Decompress, Status, FlushDecompress};
-use io::Read;
+use io::{BufRead, Read};
 
 /// TODO: finish parsing
 #[derive(Debug)]
@@ -171,6 +171,52 @@ pub fn read_and_extract_header<D: Debug>(
 }
 
 
+/// I couldnt figure out the decompress logic, so I stole this from:
+/// https://github.com/Byron/gitoxide/blob/057016e2df3138992c4857f9b65bf19dc2c9a097/git-features/src/zlib/stream/inflate.rs#L22
+/// Read bytes from `rd` and decompress them using
+/// `state` into a pre-allocated fitting buffer `dst`,
+/// returning the amount of bytes written.
+pub fn decompress_remaining(
+    rd: &mut impl BufRead,
+    state: &mut Decompress,
+    mut dst: &mut [u8]
+) -> io::Result<usize> {
+    let mut total_written = 0;
+    loop {
+        let (written, consumed, ret, eof);
+        {
+            let input = rd.fill_buf()?;
+            eof = input.is_empty();
+            let before_out = state.total_out();
+            let before_in = state.total_in();
+            let flush = if eof {
+                FlushDecompress::Finish
+            } else {
+                FlushDecompress::None
+            };
+            ret = state.decompress(input, dst, flush);
+            written = (state.total_out() - before_out) as usize;
+            total_written += written;
+            dst = &mut dst[written..];
+            consumed = (state.total_in() - before_in) as usize;
+        }
+        rd.consume(consumed);
+
+        match ret {
+            // The stream has officially ended, nothing more to do here.
+            Ok(Status::StreamEnd) => return Ok(total_written),
+            // Either input our output are depleted even though the stream is not depleted yet.
+            Ok(Status::Ok) | Ok(Status::BufError) if eof || dst.is_empty() => return Ok(total_written),
+            // Some progress was made in both the input and the output, it must continue to reach the end.
+            Ok(Status::Ok) | Ok(Status::BufError) if consumed != 0 || written != 0 => continue,
+            // A strange state, where zlib makes no progress but isn't done either. Call it out.
+            Ok(Status::Ok) | Ok(Status::BufError) => return ioerre!("Unexpected defalte status. Definitely a bug somewhere"),
+            Err(..) => return ioerre!("corrupt deflate stream"),
+        }
+    }
+}
+
+
 pub fn read_raw_object<P: AsRef<Path>>(
     path: P,
     should_read_blobs: bool,
@@ -222,15 +268,15 @@ pub fn read_raw_object<P: AsRef<Path>>(
     let mut decompressor = first_read_info.decompressor;
     let bytes_input = decompressor.total_in() as usize;
     let bytes_out = decompressor.total_out() as usize - desired_data_starts_at;
-    // TODO: need to check if the first read somehow read through the
-    // entirety of the buffer... this is highly unlikely...
-    let next_state = decompressor.decompress(
-        &entire_file_buf[bytes_input..],
+    
+    // I think you're supposed to check if the state of the first
+    // decompression is StreamEnd, but I think that is impossible if we pass in
+    // an output buffer of 128 bytes?
+    decompress_remaining(
+        &mut &entire_file_buf[bytes_input..],
+        &mut decompressor,
         &mut output_buffer[bytes_out..],
-        FlushDecompress::None,
-    )?;
-    // TODO: need to read on a loop until the entire output
-    // buffer is full...
+    ).map_err(|e| ioerr!("Failed to decompress remaining bytes of {:?}\n{}", path.as_ref(), e))?;
 
     Ok(UnparsedObject {
         object_type: first_read_info.object_type,
