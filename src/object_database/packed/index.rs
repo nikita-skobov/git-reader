@@ -73,9 +73,9 @@ impl IDXFile {
             if oid < mid_id {
                 end_search = mid;
             } else if oid > mid_id {
-                return Ok(Some(mid))
-            } else {
                 start_search = mid + 1;
+            } else {
+                return Ok(Some(mid))
             }
         }
 
