@@ -288,3 +288,15 @@ pub fn read_raw_object<P: AsRef<Path>>(
         payload: output_buffer,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nonsense3() {
+        let path = "../.git/objects/2d/f9f3d514bd85575bd848e7bfedc6375f414cd9";
+        let raw_obj = read_raw_object(path, false).unwrap();
+        std::fs::write("testfile1_2df9f3d.txt", &raw_obj.payload).unwrap();
+    }
+}
