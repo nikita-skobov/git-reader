@@ -41,6 +41,15 @@ pub fn oid_str_truncated_to_oid(oid_str: OidStrTruncated) -> io::Result<Oid> {
     Ok(oid)
 }
 
+pub fn hash_str_to_oid(hash: &str) -> io::Result<Oid> {
+    let trunc_str = hash.get(0..32)
+        .ok_or_else(|| ioerr!("Your hash '{}' must be at least 32 hex chars long", hash))?;
+    let mut oid_str_trunc = OidStrTruncated::default();
+    oid_str_trunc[..].copy_from_slice(&trunc_str[..].as_bytes());
+    let oid = oid_str_truncated_to_oid(oid_str_trunc)?;
+    Ok(oid)
+}
+
 pub fn hash_object_file_and_folder(folder: &str, filename: &str) -> io::Result<Oid> {
     let mut oid_str = OidStrTruncated::default();
     oid_str[0..2].copy_from_slice(&folder[0..2].as_bytes());
@@ -48,9 +57,7 @@ pub fn hash_object_file_and_folder(folder: &str, filename: &str) -> io::Result<O
     // now our oid_str is an array of hex characters, 32 long.
     // we can convert that to a string, and then
     // convert to a u128 using from radix:
-    let oid_str = std::str::from_utf8(&oid_str).map_err(|e| ioerr!("{}", e))?;
-    let oid = Oid::from_str_radix(oid_str, 16).map_err(|e| ioerr!("{}", e))?;
-    Ok(oid)
+    oid_str_truncated_to_oid(oid_str)
 }
 
 pub fn trunc_oid_to_u128_oid(trunc: OidTruncated) -> Oid {

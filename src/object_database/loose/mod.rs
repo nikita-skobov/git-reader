@@ -59,11 +59,7 @@ impl<T: Resolve> PartiallyResolvedLooseMap<T> {
     /// to a 128bit Oid for you.
     /// hash must be at least 32 chars.
     pub fn contains_hash(&self, hash: &str) -> io::Result<bool> {
-        let trunc_str = hash.get(0..32)
-            .ok_or_else(|| ioerr!("Your hash '{}' must be at least 32 hex chars long", hash))?;
-        let mut oid_str_trunc = OidStrTruncated::default();
-        oid_str_trunc[..].copy_from_slice(&trunc_str[..].as_bytes());
-        let oid = oid_str_truncated_to_oid(oid_str_trunc)?;
+        let oid = hash_str_to_oid(hash)?;
         Ok(self.map.contains_key(&oid))
     }
 
