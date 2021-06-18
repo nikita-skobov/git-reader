@@ -23,7 +23,16 @@ pub type OidTruncated = [u8; 16];
 pub type OidStrTruncated = [u8; 32];
 
 pub fn hex_u128_to_str(h: Oid) -> String {
-    format!("{:x}", h)
+    let hash_str = format!("{:x}", h);
+    // an oid is 128 bits, so should be 32 hex chars.
+    // if we dont have 32 hex chars, we need to prepend 0s:
+    let len = hash_str.len();
+    if len == 32 {
+        return hash_str;
+    }
+
+    let prepend_0s = "0".repeat(32 - len);
+    format!("{}{}", prepend_0s, hash_str)
 }
 
 pub fn hash_object_file_and_folder(folder: &str, filename: &str) -> io::Result<u128> {
