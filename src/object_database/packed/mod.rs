@@ -56,3 +56,23 @@ pub fn get_vec_of_unresolved_packs<P: AsRef<Path>>(
 
     Ok(out)
 }
+
+/// This resolved the index file for each `PartiallyResolvedPackAndIndex`
+/// It does not resolve the actual pack file, because most of the time
+/// we don't need to read every single pack file.
+/// Returns an error if a single index file failed to be opened/read.
+pub fn resolve_all_packs(
+    packs: &mut Vec<PartiallyResolvedPackAndIndex>
+) -> io::Result<()> {
+    for pack in packs.iter_mut() {
+        match pack {
+            PartiallyResolvedPackAndIndex::Unresolved(path) => {
+                let idx = open_idx_file(path)?;
+                *pack = PartiallyResolvedPackAndIndex::IndexResolved(idx);
+            }
+            // no need to do anything if its already resolved:
+            PartiallyResolvedPackAndIndex::IndexResolved(_) => {}
+        }
+    }
+    Ok(())
+}

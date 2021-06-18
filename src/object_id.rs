@@ -35,6 +35,12 @@ pub fn hex_u128_to_str(h: Oid) -> String {
     format!("{}{}", prepend_0s, hash_str)
 }
 
+pub fn oid_full_to_string(h: OidFull) -> io::Result<String> {
+    let hex_str = std::str::from_utf8(&h)
+        .map_err(|e| ioerr!("{}", e))?;
+    Ok(hex_str.to_string())
+}
+
 pub fn oid_str_truncated_to_oid(oid_str: OidStrTruncated) -> io::Result<Oid> {
     let oid_str = std::str::from_utf8(&oid_str).map_err(|e| ioerr!("{}", e))?;
     let oid = Oid::from_str_radix(oid_str, 16).map_err(|e| ioerr!("{}", e))?;
