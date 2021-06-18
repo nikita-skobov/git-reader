@@ -1,4 +1,4 @@
-use std::{path::{Path, PathBuf}, io, fmt::Debug};
+use std::{path::{Path, PathBuf}, io, fmt::Debug, mem::size_of};
 use byteorder::{BigEndian, ByteOrder};
 use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_oid_to_u128_oid, full_slice_oid_to_u128_oid}, ioerr};
 use memmap2::Mmap;
@@ -15,9 +15,11 @@ pub const SHA1_SIZE: usize = 20;
 /// according to docs, it looks like trailer is just 2 checksums?
 pub const IDX_TRAILER_SIZE: usize = SHA1_SIZE * 2;
 pub const MINIMAL_IDX_FILE_SIZE: usize = IDX_TRAILER_SIZE + FANOUT_LENGTH * FANOUT_ENTRY_SIZE;
-const V1_HEADER_SIZE: usize = FANOUT_LENGTH * FANOUT_ENTRY_SIZE;
-const V2_HEADER_SIZE: usize = FANOUT_ENTRY_SIZE * 2 + FANOUT_LENGTH * FANOUT_ENTRY_SIZE;
-
+pub const V1_HEADER_SIZE: usize = FANOUT_LENGTH * FANOUT_ENTRY_SIZE;
+pub const V2_HEADER_SIZE: usize = FANOUT_ENTRY_SIZE * 2 + FANOUT_LENGTH * FANOUT_ENTRY_SIZE;
+pub const N32_HIGH_BIT: u32 = 0b10000000_00000000_00000000_00000000;
+pub const N32_SIZE: usize = size_of::<u32>();
+pub const N64_SIZE: usize = size_of::<u64>();
 
 #[derive(Debug)]
 pub enum PartiallyResolvedPackAndIndex {
@@ -52,7 +54,7 @@ impl Debug for IDXFile {
 }
 
 impl IDXFile {
-    pub fn find_packfile_index_for(&self, oid: Oid) -> io::Result<Option<usize>> {
+    pub fn find_index_for(&self, oid: Oid) -> io::Result<Option<usize>> {
         let first_byte = get_first_byte_of_oid(oid) as usize;
         let mut start_search = if first_byte > 0 {
             self.fanout_table[first_byte - 1]
@@ -77,6 +79,23 @@ impl IDXFile {
         Ok(None)
     }
 
+    pub fn find_packfile_index_for(&self, index: usize) -> Option<u64> {
+        match self.version {
+            IDXVersion::V2 => {
+                let start = self.offset_pack_offset_v2() + index * FANOUT_ENTRY_SIZE;
+                let desired_range = start..(start + N32_SIZE);
+                let desired_bytes = &self.mmapped_file.get(desired_range)?;
+                self.pack_offset_from_offset_v2(desired_bytes, self.offset_pack_offset64_v2())
+            }
+            IDXVersion::V1 => {
+                let start = V1_HEADER_SIZE + index * (FANOUT_ENTRY_SIZE + SHA1_SIZE);
+                let desired_range = start..(start + FANOUT_ENTRY_SIZE);
+                let desired_bytes = &self.mmapped_file.get(desired_range)?;
+                Some(BigEndian::read_u32(desired_bytes) as u64)
+            }
+        }
+    }
+
     pub fn get_oid_at_index(&self, index: usize) -> Option<Oid> {
         let start = match self.version {
             IDXVersion::V2 => V2_HEADER_SIZE + index * SHA1_SIZE,
@@ -85,6 +104,35 @@ impl IDXFile {
         let desired_range = start..start + SHA1_SIZE;
         let full_sha = self.mmapped_file.get(desired_range)?;
         Some(full_slice_oid_to_u128_oid(full_sha))
+    }
+
+    pub fn offset_crc32_v2(&self) -> usize {
+        V2_HEADER_SIZE + self.num_objects as usize * SHA1_SIZE
+    }
+
+    pub fn offset_pack_offset_v2(&self) -> usize {
+        self.offset_crc32_v2() + self.num_objects as usize * FANOUT_ENTRY_SIZE
+    }
+
+    pub fn offset_pack_offset64_v2(&self) -> usize {
+        self.offset_pack_offset_v2() + self.num_objects as usize * N32_SIZE
+    }
+
+    pub fn pack_offset_from_offset_v2(
+        &self,
+        offset: &[u8],
+        pack64_offset: usize
+    ) -> Option<u64> {
+        let ofs32 = BigEndian::read_u32(offset);
+        let value = if (ofs32 & N32_HIGH_BIT) == N32_HIGH_BIT {
+            let from = pack64_offset + (ofs32 ^ N32_HIGH_BIT) as usize * N64_SIZE;
+            let desired_range = from..(from + N64_SIZE);
+            let desired_bytes = self.mmapped_file.get(desired_range)?;
+            BigEndian::read_u64(desired_bytes)
+        } else {
+            ofs32 as u64
+        };
+        Some(value)
     }
 }
 
