@@ -1,10 +1,8 @@
 use crate::object_id::*;
-use crate::{ioerr, fs_helpers, ioerre};
+use crate::{fs_helpers, ioerre};
 use std::path::{Path, PathBuf};
 use std::{io, collections::HashMap, fs::DirEntry};
-use flate2::{Decompress, Status};
-use io::Read;
-use super::objects::ObjectType;
+use super::objects::{UnparsedObject, ObjectType, read_raw_object};
 
 /// A loose object is either unresolved, in which case
 /// it points to a file: 00/xyzdadadebebe that contains
@@ -14,7 +12,7 @@ use super::objects::ObjectType;
 #[derive(Debug)]
 pub enum PartiallyResolvedLooseObject {
     Unresolved(PathBuf),
-    Resolved(ObjectType),
+    Resolved(UnparsedObject),
 }
 
 /// git objects directory can have many loose
@@ -55,13 +53,13 @@ impl PartiallyResolvedLooseMap {
     /// returns an error if there was an error during the resolving process.
     /// inside error is Option which is None if the desired object id does
     /// not exist
-    pub fn get_object<'a>(&'a mut self, oid: Oid) -> io::Result<Option<&'a ObjectType>> {
+    pub fn get_object<'a>(&'a mut self, oid: Oid) -> io::Result<Option<&'a UnparsedObject>> {
         match self.map.get_mut(&oid) {
             None => Ok(None),
             Some(partially_resolved) => match partially_resolved {
                 PartiallyResolvedLooseObject::Resolved(object_type) => Ok(Some(object_type)),
                 PartiallyResolvedLooseObject::Unresolved(path) => {
-                    let resolved_obj = read_object(path)?;
+                    let resolved_obj = read_raw_object(path, false)?;
                     *partially_resolved = PartiallyResolvedLooseObject::Resolved(resolved_obj);
                     match partially_resolved {
                         PartiallyResolvedLooseObject::Resolved(object_type) => Ok(Some(object_type)),
@@ -81,43 +79,6 @@ impl PartiallyResolvedLooseMap {
         }
         Ok(())
     }
-}
-
-pub fn read_object<P: AsRef<Path>>(path: P) -> io::Result<ObjectType> {
-    let mut file = fs_helpers::get_readonly_handle(&path)?;
-    // we expect a git object to contain a zlib header
-    let will_contain_zlib_header = true;
-    let mut decompressor = Decompress::new(will_contain_zlib_header);
-
-    // TODO: there is a way to read the first part of the
-    // zlib object, and then continue reading the rest of it...
-    // its a bit complicated for me atm, and I don't know if I
-    // really need that. Commit objects and tree objects
-    // should fit entirely within 2kb, and only blobs would
-    // potentially require more than 1kb to read entirely.
-    // In the future, this would need to be more robust
-    // if I want this library to be able to fully decode
-    // any object, but I mostly care about traversing
-    // the commit graph, and getting a list of all blobs in a commit.
-    let read_max = 2048;
-    let file_size = file.metadata()?.len() as usize;
-    let mut buf = if file_size > read_max {
-        vec![0; read_max]
-    } else {
-        vec![0; file_size]
-    };
-    file.read_exact(&mut buf).map_err(|e| ioerr!("Failed to read file {:?}\n{}", path.as_ref(), e))?;
-    let mut out = [0; 128];
-    decompressor.decompress(&buf, &mut out, flate2::FlushDecompress::None)?;
-
-    // we should now have the first 128 bytes
-    // of the decompressed object. This will contain the header
-    // which has format: `<type><space><size><0byte>`
-    // so we try to decode the header:
-    let obj_type = ObjectType::new(&out)
-        .ok_or(ioerr!("Failed to decode object header for {:?}", path.as_ref()))?;
-
-    Ok(obj_type)
 }
 
 #[inline(always)]
