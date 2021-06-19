@@ -3,6 +3,7 @@ use crate::{fs_helpers, object_id::OidFull, ioerre, ioerr};
 use byteorder::{ByteOrder, BigEndian};
 use memmap2::Mmap;
 use super::parse_pack_or_idx_id;
+use flate2::{FlushDecompress, Decompress};
 
 
 pub const PACK_SIGNATURE: &[u8; 4] = b"PACK";
@@ -227,6 +228,49 @@ impl PackFile {
             // after the 20 byte sha:
             Ok((obj_type, length, start_reading_at + full_sha_len))
         }
+    }
+
+    /// return the decompressed data from an object at a given
+    /// index. the `decompressed_size` should be the size of the output vec.
+    /// Note: this ONLY decompressed data at an index and outputs
+    /// a vec of desired decompressed size. It does not apply deltas.
+    /// This is a convenience method to get out the raw data for each object, and
+    /// then you can resolve deltas between the two as needed.
+    pub fn get_decompressed_data_from_index(
+        &self,
+        decompressed_size: usize,
+        starts_at: usize,
+    ) -> io::Result<Vec<u8>> {
+        // Is it guaranteed that compressed data is ALWAYS smaller
+        // than the decompressed output? This is quite an assumption here...
+        // to be safe, we will extend it by 128 bytes. But then
+        // if we do that, we have to check if we reached the end of the file,
+        // and reduce it if we've gone too far:
+        let compressed_data_ends_at = starts_at + decompressed_size + 128;
+        let compressed_data_ends_at = if compressed_data_ends_at > self.mmapped_file.len() {
+            self.mmapped_file.len()
+        } else {
+            // we are good:
+            compressed_data_ends_at
+        };
+        let compressed_data_range = starts_at..compressed_data_ends_at;
+        let compressed_data = self.mmapped_file.get(compressed_data_range)
+            .ok_or_else(|| ioerr!("Failed to read compressed data of pack file"))?;
+
+        let mut out_vec = vec![0; decompressed_size];
+        // we expect a git object to contain a zlib header
+        let will_contain_zlib_header = true;
+        let mut decompressor = Decompress::new(will_contain_zlib_header);
+        // TODO: need to care about this decompressed state?
+        // is it possible that we don't read into the entire
+        // out vec in one go?
+        let _decompressed_state = decompressor.decompress(
+            compressed_data, &mut out_vec, FlushDecompress::None)?;
+        let num_bytes_out = decompressor.total_out() as usize;
+        if num_bytes_out != decompressed_size {
+            return ioerre!("Failed to decompress {} bytes in one go. Only was able to decompress {} bytes. This is a bug on our end, please report this.", decompressed_size, num_bytes_out);
+        }
+        Ok(out_vec)
     }
 }
 
