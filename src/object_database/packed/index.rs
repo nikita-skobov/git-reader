@@ -2,7 +2,7 @@ use std::{path::{Path, PathBuf}, io, fmt::Debug, mem::size_of};
 use byteorder::{BigEndian, ByteOrder};
 use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_oid_to_u128_oid, full_slice_oid_to_u128_oid, full_oid_from_str, OidFull}, ioerr};
 use memmap2::Mmap;
-use super::PartiallyResolvedPackFile;
+use super::{parse_pack_or_idx_id, PartiallyResolvedPackFile};
 
 /// see: https://git-scm.com/docs/pack-format#_version_2_pack_idx_files_support_packs_larger_than_4_gib_and
 pub const V2_IDX_SIGNATURE: [u8; 4] = [255, b't', b'O', b'c'];
@@ -190,18 +190,8 @@ pub fn open_idx_file<P: AsRef<Path>>(
     let mut fanout_table = [0; FANOUT_LENGTH];
     fill_fan(&mut fanout_table, data);
     let num_objects = fanout_table[FANOUT_LENGTH - 1];
-
-    let idx_file_name = idx_file_path.file_name()
-        .ok_or_else(|| ioerr!("Failed to read filename of idx file: {:?}", idx_file_path))?;
-    let idx_file_name = idx_file_name.to_str()
-        .ok_or_else(|| ioerr!("Failed to read filename of idx file: {:?}", idx_file_path))?;
-    // the 40 hex char hash should be
-    // between the 5th and 45th character:
-    // pack-{40 hex chars}.idx
-    let idx_pack_hash = idx_file_name.get(5..45)
-        .ok_or_else(|| ioerr!("Failed to parse idx file name: {:?}", idx_file_name))?;
-    let idx_pack_id = full_oid_from_str(idx_pack_hash)
-        .ok_or_else(|| ioerr!("Failed to parse idx file name into a sha1 hash: {:?}", idx_file_name))?;
+    let idx_pack_id = parse_pack_or_idx_id(&idx_file_path)
+        .ok_or_else(|| ioerr!("Failed to parse id from idx file: {:?}", idx_file_path))?;
 
     let idxfile = IDXFile {
         fanout_table,
