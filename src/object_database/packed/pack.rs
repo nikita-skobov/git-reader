@@ -20,8 +20,12 @@ pub enum PartiallyResolvedPackFile {
     Resolved(PackFile),
 }
 
+/// Used to represent the type of a pack file object
+/// without containing the necessary information within
+/// the enum. Transform this into a PackFileObjectType
+/// before returning.
 #[derive(Debug)]
-pub enum PackFileObjectType {
+pub enum PackFileObjectTypeInner {
     Commit,
     Tree,
     Blob,
@@ -30,7 +34,36 @@ pub enum PackFileObjectType {
     RefDelta,
 }
 
-impl TryFrom<u8> for PackFileObjectType {
+#[derive(Debug)]
+pub enum PackFileObjectType {
+    Commit,
+    Tree,
+    Blob,
+    Tag,
+    /// the negative offset of where the base object is
+    OfsDelta(usize),
+    /// the id of the object that should be used as the base
+    RefDelta(OidFull),
+}
+
+impl PackFileObjectType {
+    /// only used to convert between
+    /// the simple types (Commit, Tree, Blob, and Tag)
+    /// do not call this with OfsDelta, or RefDelta
+    pub fn from_simple(simple: PackFileObjectTypeInner) -> Option<PackFileObjectType> {
+        let out = match simple {
+            PackFileObjectTypeInner::Commit => PackFileObjectType::Commit,
+            PackFileObjectTypeInner::Tree => PackFileObjectType::Tree,
+            PackFileObjectTypeInner::Blob => PackFileObjectType::Blob,
+            PackFileObjectTypeInner::Tag => PackFileObjectType::Tag,
+            PackFileObjectTypeInner::OfsDelta |
+            PackFileObjectTypeInner::RefDelta => return None,
+        };
+        Some(out)
+    }
+}
+
+impl TryFrom<u8> for PackFileObjectTypeInner {
     type Error = io::Error;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
@@ -59,13 +92,14 @@ pub struct PackFile {
 
 impl PackFile {
     /// read the pack file starting at index, and try to parse
-    /// the object type and length
+    /// the object type and length. returns
+    /// (pack file object type, length of object, index where raw object starts)
     /// inspired by:
     /// https://github.com/speedata/gogit/blob/c5cbd8f9b7205cd5390219b532ca35d0f76b9eab/repository.go#L299
     pub fn get_object_type_and_len_at_index(
         &self,
         index: usize
-    ) -> io::Result<(PackFileObjectType, u128)> {
+    ) -> io::Result<(PackFileObjectType, u128, usize)> {
         // since the length of an object has a variable
         // length, we don't know how many bytes to read here.
         // However, we obviously need to represent the size of this
@@ -101,7 +135,7 @@ impl PackFile {
         // ie: can an object have a length of 15 or less?
         let first_byte = try_parse_segment[0];
         let object_type_byte = first_byte & type_bits_mask;
-        let object_type = PackFileObjectType::try_from(object_type_byte)?;
+        let object_type = PackFileObjectTypeInner::try_from(object_type_byte)?;
 
         // for the first byte, the length only exists
         // in the last 4 bits.
@@ -111,6 +145,7 @@ impl PackFile {
         // so the next bits need to go to the left of these 4 bits.
         let mut shift = 4;
         let mut found_last_byte = false;
+        let mut bytes_read = 1;
         // we just read the first byte above, so now
         // read every byte after it:
         for byte in &try_parse_segment[1..] {
@@ -129,6 +164,7 @@ impl PackFile {
             // since now we are reading 7 bits at a time,
             // we shift the length by 7:
             shift += 7;
+            bytes_read += 1;
 
             if should_break {
                 found_last_byte = true;
@@ -139,10 +175,103 @@ impl PackFile {
         if !found_last_byte {
             return ioerre!("Read {} bytes and failed to find a byte whose MSB is 0... Failed to parse object's variable length", try_read_size);
         }
-        Ok((object_type, length))
+
+        match object_type {
+            PackFileObjectTypeInner::Commit |
+            PackFileObjectTypeInner::Tree |
+            PackFileObjectTypeInner::Blob |
+            PackFileObjectTypeInner::Tag => {
+                // we can unwrap because we know we are
+                // passing a simple type:
+                let out_obj = PackFileObjectType::from_simple(object_type)
+                    .unwrap();
+                return Ok((out_obj, length, index + bytes_read))
+            }
+            _ => {},
+        }
+
+        // now we perform further calculations if
+        // its either an offset delta, or a ref delta.
+        if let PackFileObjectTypeInner::OfsDelta = object_type {
+            // I was a bit confused from the git documentation, but
+            // after looking at:
+            // https://github.com/Byron/gitoxide/blob/6200ed9ac5609c74de4254ab663c19cfe3591402/git-pack/src/data/entry/decode.rs#L99
+            // I think the negative offset is calculated the same way we
+            // calculated the above length, except this time
+            // we dont have to skip 4 bits like we did above.
+            // so its the same algorithm, just with 7 bits at a time.
+            // I copied this function from Byron
+            // because to be honest im not sure where the value += 1 comes from
+            // but if it works, it works.
+            let desired_range_start = index + bytes_read;
+            let desired_range = desired_range_start..(desired_range_start + try_read_size);
+            let negative_offset_data = self.mmapped_file.get(desired_range)
+                .ok_or_else(|| ioerr!("Not enough bytes to read negative offset data from a delta offset object"))?;
+            let (distance, more_bytes_read) = find_negative_offset(&negative_offset_data)
+                .ok_or_else(|| ioerr!("Failed to parse negative offset data from a delta offset object"))?;
+            let obj_type = PackFileObjectType::OfsDelta(distance);
+            Ok((obj_type, length, desired_range_start + more_bytes_read))
+        } else {
+            // otherwise its a ref delta:
+            // so here we know we just need to read the next 20
+            // bytes which forms the sha hash:
+            let mut id = OidFull::default();
+            let full_sha_len = id.len();
+            let start_reading_at = index + bytes_read;
+            let sha_read_range = start_reading_at..(start_reading_at + full_sha_len);
+            let sha_data = self.mmapped_file.get(sha_read_range)
+                .ok_or_else(|| ioerr!("Detected a ref delta, but failed to read an additional 20 bytes for the SHA"))?;
+            id.copy_from_slice(sha_data);
+            let obj_type = PackFileObjectType::RefDelta(id);
+            // the actual raw object resides immediately
+            // after the 20 byte sha:
+            Ok((obj_type, length, start_reading_at + full_sha_len))
+        }
     }
 }
 
+/// algorithm borrowed from:
+/// https://github.com/Byron/gitoxide/blob/6200ed9ac5609c74de4254ab663c19cfe3591402/git-pack/src/data/entry/decode.rs#L99
+/// Returns negative offset of the base object, and number
+/// of bytes read
+#[inline]
+fn find_negative_offset(d: &[u8]) -> Option<(usize, usize)> {
+    let first_byte = d[0];
+    let mut value = first_byte as usize & 0x7f;
+    let mut num_bytes_read = 1;
+    if first_byte & 0b1000_0000 == 0 {
+        // we only needed 1 byte to calculate
+        // the negative offset. pretty unlikely,
+        // but we should check just in case:
+        return Some((value, num_bytes_read))
+    }
+
+    // otherwise, read all remaining bytes
+    // until we reach one that has a 0 as
+    // the MSB:
+    let mut found_0_msb = false;
+    for byte in &d[1..] {
+        let byte = *byte;
+        let mut should_break = false;
+        if byte & 0b1000_0000 == 0 {
+            // this should be the last byte we read
+            should_break = true;
+        }
+        value += 1;
+        value = (value << 7) + (byte as usize & 0x7f);
+        num_bytes_read += 1;
+        if should_break {
+            found_0_msb = true;
+            break;
+        }
+    }
+
+    if found_0_msb {
+        Some((value, num_bytes_read))
+    } else {
+        None
+    }
+}
 
 
 /// Use this if you already read a .idx file and know the id.
