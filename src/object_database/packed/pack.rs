@@ -1,5 +1,5 @@
 use std::{io, path::{Path, PathBuf}, convert::TryFrom};
-use crate::{fs_helpers, object_id::OidFull, ioerre, ioerr};
+use crate::{fs_helpers, object_id::{oid_full_to_string, OidFull}, ioerre, ioerr};
 use byteorder::{ByteOrder, BigEndian};
 use memmap2::Mmap;
 use super::parse_pack_or_idx_id;
@@ -41,7 +41,7 @@ pub enum PackFileObjectType {
     Tree,
     Blob,
     Tag,
-    /// the negative offset of where the base object is
+    /// the index of where the base object starts at
     OfsDelta(usize),
     /// the id of the object that should be used as the base
     RefDelta(OidFull),
@@ -210,7 +210,11 @@ impl PackFile {
                 .ok_or_else(|| ioerr!("Not enough bytes to read negative offset data from a delta offset object"))?;
             let (distance, more_bytes_read) = find_negative_offset(&negative_offset_data)
                 .ok_or_else(|| ioerr!("Failed to parse negative offset data from a delta offset object"))?;
-            let obj_type = PackFileObjectType::OfsDelta(distance);
+            if distance > index {
+                return ioerre!("Detected a offset delta object has a negative offset of {} bytes, but that is farther than the beginning of the file", distance);
+            }
+            let base_obj_starts_at = index - distance;
+            let obj_type = PackFileObjectType::OfsDelta(base_obj_starts_at);
             Ok((obj_type, length, desired_range_start + more_bytes_read))
         } else {
             // otherwise its a ref delta:
