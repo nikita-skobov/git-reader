@@ -1,7 +1,8 @@
 use std::{io, path::{Path, PathBuf}};
-use crate::{fs_helpers, object_id::OidFull, ioerre};
+use crate::{fs_helpers, object_id::OidFull, ioerre, ioerr};
 use byteorder::{ByteOrder, BigEndian};
 use memmap2::Mmap;
+use super::parse_pack_or_idx_id;
 
 
 pub const PACK_SIGNATURE: &[u8; 4] = b"PACK";
@@ -25,6 +26,9 @@ pub struct PackFile {
     pub mmapped_file: Mmap,
 }
 
+/// Use this if you already read a .idx file and know the id.
+/// otherwise if you don't know the ID yet, call
+/// `open_pack_file_ex` and we will try to parse it for you.
 pub fn open_pack_file<P: AsRef<Path>>(
     path: P,
     id: OidFull,
@@ -51,4 +55,17 @@ pub fn open_pack_file<P: AsRef<Path>>(
         mmapped_file: mmapped,
     };
     Ok(packfile)
+}
+
+/// Use this if you don't know the id of the pack file yet
+/// and you wish to parse it from the filename.
+/// Otherwise, use `open_pack_file` if you already
+/// know the id of the .idx file.
+pub fn open_pack_file_ex<P: AsRef<Path>>(
+    path: P
+) -> io::Result<PackFile> {
+    let path = path.as_ref();
+    let pack_id = parse_pack_or_idx_id(&path)
+        .ok_or_else(|| ioerr!("Failed to parse id from pack file: {:?}", path))?;
+    open_pack_file(path, pack_id)
 }
