@@ -9,6 +9,9 @@ mod pack;
 use pack as pack_file;
 pub use pack_file::*;
 
+pub mod delta;
+pub use delta::*;
+
 
 #[inline(always)]
 pub fn get_pack_file_prefix_string(direntry: &DirEntry) -> Option<String> {

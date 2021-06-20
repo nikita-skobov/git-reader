@@ -1,8 +1,8 @@
-use std::{io, path::{Path, PathBuf}, convert::TryFrom};
+use std::{io, path::{Path, PathBuf}, convert::{TryInto, TryFrom}};
 use crate::{fs_helpers, object_id::{oid_full_to_string, OidFull}, ioerre, ioerr};
 use byteorder::{ByteOrder, BigEndian};
 use memmap2::Mmap;
-use super::parse_pack_or_idx_id;
+use super::{apply_delta, parse_pack_or_idx_id};
 use flate2::{FlushDecompress, Decompress};
 
 
@@ -208,7 +208,7 @@ impl PackFile {
             let desired_range = desired_range_start..(desired_range_start + try_read_size);
             let negative_offset_data = self.mmapped_file.get(desired_range)
                 .ok_or_else(|| ioerr!("Not enough bytes to read negative offset data from a delta offset object"))?;
-            let (distance, more_bytes_read) = find_negative_offset(&negative_offset_data)
+            let (distance, more_bytes_read) = find_encoded_length(&negative_offset_data)
                 .ok_or_else(|| ioerr!("Failed to parse negative offset data from a delta offset object"))?;
             if distance > index {
                 return ioerre!("Detected a offset delta object has a negative offset of {} bytes, but that is farther than the beginning of the file", distance);
@@ -276,14 +276,69 @@ impl PackFile {
         }
         Ok(out_vec)
     }
+
+    /// The continuation of `get_object_type_and_len_at_index`.
+    /// Call this to either get a simple decompressed data of a commit/blob/tree/tag,
+    /// or if we detected a delta object, then load the base object, resolve the delta,
+    /// and then return the result raw object data.
+    pub fn get_raw_object_data(
+        &self,
+        decompressed_size: usize,
+        starts_at: usize,
+        object_type: PackFileObjectType,
+    ) -> io::Result<Vec<u8>> {
+        let (base_object_data, this_object_data) = match object_type {
+            PackFileObjectType::OfsDelta(base_starts_at) => {
+                let (
+                    next_obj_type,
+                    next_obj_size,
+                    next_obj_index
+                ) = self.get_object_type_and_len_at_index(base_starts_at)?;
+                // this should not resolve to another offset/ref delta right?
+                // if it does, this can become infinitely recursive...
+                let next_obj_size: usize = next_obj_size.try_into()
+                    .map_err(|_| ioerr!("Failed to convert {} into a usize. Either we failed at parsing this value, or your architecture does not support numbers this large", next_obj_size))?;
+                let base_raw_data = self.get_raw_object_data(next_obj_size, next_obj_index, next_obj_type)?;
+                let our_data = self.get_decompressed_data_from_index(decompressed_size, starts_at)?;
+                (base_raw_data, our_data)
+            }
+
+            // for a ref delta, we need to search the index file
+            // to find where this object exists in our packfile.
+            // i don't think the packfile itself has
+            // enough information to find it.
+            PackFileObjectType::RefDelta(id) => {
+                let id_str = oid_full_to_string(id);
+                return ioerre!("Not enough information to load base object of id {}. This base object needs to be resolved first by the .idx file before the pack file can parse it.", id_str);
+            }
+
+            // these can be simply decompressed:
+            PackFileObjectType::Commit |
+            PackFileObjectType::Tree |
+            PackFileObjectType::Blob |
+            PackFileObjectType::Tag => {
+                return self.get_decompressed_data_from_index(decompressed_size, starts_at)
+            }
+        };
+
+        // for our data, we need to extract the length, which
+        // is again size encoded like the other cases:
+        let (_base_size, num_read) = find_encoded_length(&this_object_data)
+            .ok_or_else(|| ioerr!("Failed to find size of base object"))?;
+        let this_object_data = &this_object_data[num_read..];
+        let (our_size, num_read) = find_encoded_length(&this_object_data)
+            .ok_or_else(|| ioerr!("Failed to find size of object"))?;
+        let this_object_data = &this_object_data[num_read..];
+
+        apply_delta(&base_object_data, this_object_data, our_size)
+    }
 }
 
 /// algorithm borrowed from:
 /// https://github.com/Byron/gitoxide/blob/6200ed9ac5609c74de4254ab663c19cfe3591402/git-pack/src/data/entry/decode.rs#L99
-/// Returns negative offset of the base object, and number
-/// of bytes read
+/// Returns length, and number of bytes read
 #[inline]
-fn find_negative_offset(d: &[u8]) -> Option<(usize, usize)> {
+fn find_encoded_length(d: &[u8]) -> Option<(usize, usize)> {
     let first_byte = d[0];
     let mut value = first_byte as usize & 0x7f;
     let mut num_bytes_read = 1;
