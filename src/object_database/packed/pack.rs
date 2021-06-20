@@ -1,5 +1,5 @@
 use std::{io, path::{Path, PathBuf}, convert::{TryInto, TryFrom}};
-use crate::{fs_helpers, object_id::{oid_full_to_string, OidFull}, ioerre, ioerr};
+use crate::{fs_helpers, object_id::{oid_full_to_string, OidFull}, ioerre, ioerr, object_database::loose::{UnparsedObjectType, UnparsedObject}};
 use byteorder::{ByteOrder, BigEndian};
 use memmap2::Mmap;
 use super::{apply_delta, parse_pack_or_idx_id};
@@ -59,6 +59,18 @@ impl PackFileObjectType {
             PackFileObjectTypeInner::Tag => PackFileObjectType::Tag,
             PackFileObjectTypeInner::OfsDelta |
             PackFileObjectTypeInner::RefDelta => return None,
+        };
+        Some(out)
+    }
+
+    pub fn into_unparsed_type(&self) -> Option<UnparsedObjectType> {
+        let out = match self {
+            PackFileObjectType::Commit => UnparsedObjectType::Commit,
+            PackFileObjectType::Tree => UnparsedObjectType::Tree,
+            PackFileObjectType::Blob => UnparsedObjectType::Blob,
+            PackFileObjectType::Tag => UnparsedObjectType::Tag,
+            PackFileObjectType::OfsDelta(_) |
+            PackFileObjectType::RefDelta(_) => return None,
         };
         Some(out)
     }
@@ -278,20 +290,17 @@ impl PackFile {
     }
 
     /// The continuation of `get_object_type_and_len_at_index`.
-    /// Call this to either get a simple decompressed data of a commit/blob/tree/tag,
-    /// or if we detected a delta object, then load the base object, resolve the delta,
-    /// and then return the result raw object data.
-    /// also returns the type of the data returned. For everything other than
-    /// delta objects, this will be the same type as what was input.
-    /// But for delta objects, we don't know what our type is until
-    /// we resolve the base object, so that base object's type is returned.
-    pub fn get_raw_object_data_and_type(
+    /// Call this to fully resolve an object from a packfile using previously
+    /// found information from the `get_object_type_and_len_at_index` call.
+    /// This function will recursively resolve delta offsets (but not reference deltas!)
+    /// and return an unparsed object that should be either a commit, tree, blob, or tag.
+    pub fn resolve_unparsed_object(
         &self,
         decompressed_size: usize,
         starts_at: usize,
         object_type: PackFileObjectType,
-    ) -> io::Result<(PackFileObjectType, Vec<u8>)> {
-        let ((base_object_type, base_object_data), this_object_data) = match object_type {
+    ) -> io::Result<UnparsedObject> {
+        let (unparsed_object, this_object_data) = match object_type {
             PackFileObjectType::OfsDelta(base_starts_at) => {
                 let (
                     next_obj_type,
@@ -300,7 +309,7 @@ impl PackFile {
                 ) = self.get_object_type_and_len_at_index(base_starts_at)?;
                 let next_obj_size: usize = next_obj_size.try_into()
                     .map_err(|_| ioerr!("Failed to convert {} into a usize. Either we failed at parsing this value, or your architecture does not support numbers this large", next_obj_size))?;
-                let base_raw_data = self.get_raw_object_data_and_type(next_obj_size, next_obj_index, next_obj_type)?;
+                let base_raw_data = self.resolve_unparsed_object(next_obj_size, next_obj_index, next_obj_type)?;
                 let our_data = self.get_decompressed_data_from_index(decompressed_size, starts_at)?;
                 (base_raw_data, our_data)
             }
@@ -320,9 +329,19 @@ impl PackFile {
             PackFileObjectType::Blob |
             PackFileObjectType::Tag => {
                 let data = self.get_decompressed_data_from_index(decompressed_size, starts_at)?;
-                return Ok((object_type, data));
+                // safe to unwrap because we know we are only passing a
+                // simple type that can be converted:
+                let unparsed_type = object_type.into_unparsed_type().unwrap();
+                let unparsed_obj = UnparsedObject {
+                    object_type: unparsed_type,
+                    payload: data,
+                };
+                return Ok(unparsed_obj);
             }
         };
+
+        let base_object_data = unparsed_object.payload;
+        let base_object_type = unparsed_object.object_type;
 
         // for our data, we need to extract the length, which
         // is again size encoded like the other cases:
@@ -338,7 +357,11 @@ impl PackFile {
         // eprintln!("Our delta data: {}", this_object_data.len());
         // eprintln!("We should be turned into a data of size: {}", our_size);
         let data_out = apply_delta(&base_object_data, this_object_data, our_size)?;
-        Ok((base_object_type, data_out))
+        let unparsed_obj = UnparsedObject {
+            object_type: base_object_type,
+            payload: data_out
+        };
+        Ok(unparsed_obj)
     }
 }
 

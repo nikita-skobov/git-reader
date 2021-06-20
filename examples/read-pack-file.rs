@@ -1,6 +1,7 @@
 use std::{path::PathBuf, io};
 use git_walker::{ioerr, object_database, ioerre};
 use object_database::{loose::{tree_object_parsing::TreeObject, commit_object_parsing::{ParseCommit, CommitOnlyTreeAndParents}}, packed::{open_pack_file_ex, DATA_STARTS_AT}};
+use object_database::loose::UnparsedObjectType;
 
 pub fn realmain() -> io::Result<()> {
     let args = std::env::args().collect::<Vec<_>>();
@@ -30,29 +31,26 @@ pub fn realmain() -> io::Result<()> {
     println!("compressed data starts at index {}", object_starts_at);
 
     let usize_len = length as usize;
-    let (obj_type, obj_data) = packfile.get_raw_object_data_and_type(
+    let unparsed_obj = packfile.resolve_unparsed_object(
         usize_len, object_starts_at, obj_type)?;
+    let obj_data = unparsed_obj.payload;
+    let obj_type = unparsed_obj.object_type;
     println!("Successfully got back raw object data and type");
 
     match obj_type {
-        object_database::packed::PackFileObjectType::Commit => {
+        UnparsedObjectType::Commit => {
             let commit_obj = CommitOnlyTreeAndParents::parse(&obj_data)?;
             println!("{:#?}", commit_obj);
         }
-        object_database::packed::PackFileObjectType::Tree => {
+        UnparsedObjectType::Tree => {
             let tree_obj = TreeObject::parse(&obj_data)?;
             println!("{:#?}", tree_obj);
         }
-        object_database::packed::PackFileObjectType::Blob => {
-            println!("Got back a blob... doing nothing");
+        UnparsedObjectType::Blob => {
+            println!("Got a blob... doing nothing");
         }
-        object_database::packed::PackFileObjectType::Tag => {
-            println!("got back a tag.. doing nothing");
-        }
-
-        object_database::packed::PackFileObjectType::OfsDelta(_) |
-        object_database::packed::PackFileObjectType::RefDelta(_) => {
-            panic!("Should not get back unresolved data...")
+        UnparsedObjectType::Tag => {
+            println!("Got a tag... doing nothing");
         }
     }
 
