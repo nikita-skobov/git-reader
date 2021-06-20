@@ -150,6 +150,28 @@ impl<T: Resolve> ObjectDB<T> {
         }
         collect_results
     }
+
+    pub fn walk_all_oids<F>(&self, walk_cb: F)
+        where F: FnMut(Oid)
+    {
+        let mut walk_cb = walk_cb;
+        for key in self.loose.map.keys() {
+            walk_cb(*key);
+        }
+
+        for pack in self.packs.iter() {
+            match pack {
+                PartiallyResolvedPackAndIndex::IndexResolved(idx) => {
+                    idx.walk_all_oids(|oid| {
+                        walk_cb(oid);
+                        false
+                    });
+                }
+                // cannot walk if its not resolved
+                PartiallyResolvedPackAndIndex::Unresolved(_) => {}
+            }
+        }
+    }
 }
 
 pub enum PartialSearchResult {
