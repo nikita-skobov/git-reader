@@ -1,6 +1,6 @@
 use std::{path::{Path, PathBuf}, io, fmt::Debug, mem::size_of};
 use byteorder::{BigEndian, ByteOrder};
-use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_oid_to_u128_oid, full_slice_oid_to_u128_oid, full_oid_from_str, OidFull, hex_u128_to_str}, ioerr, object_database::PartialSearchResult};
+use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_oid_to_u128_oid, full_slice_oid_to_u128_oid, full_oid_from_str, OidFull, hex_u128_to_str, PartialOid}, ioerr, object_database::PartialSearchResult};
 use memmap2::Mmap;
 use super::{parse_pack_or_idx_id, PartiallyResolvedPackFile};
 
@@ -214,13 +214,12 @@ impl IDXFile {
         Some(value)
     }
 
-    pub fn try_find_match_from_partial(&self, partial_oid: Oid) -> PartialSearchResult {
-        let first_byte = get_first_byte_of_oid(partial_oid);
+    pub fn try_find_match_from_partial(&self, partial_oid: PartialOid) -> PartialSearchResult {
+        let first_byte = get_first_byte_of_oid(partial_oid.oid);
 
         let mut found_matches = vec![];
         self.walk_all_oids(|oid| {
-            // this indicates a potential match
-            if oid & partial_oid == partial_oid {
+            if partial_oid.matches(oid) {
                 found_matches.push(oid);
             }
 

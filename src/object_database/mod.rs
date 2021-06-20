@@ -1,5 +1,5 @@
 use std::{path::Path, io};
-use crate::{ioerre, object_id::{oid_full_to_string, Oid}, ioerr};
+use crate::{ioerre, object_id::{oid_full_to_string, Oid, PartialOid}, ioerr};
 
 pub mod loose;
 use loose::*;
@@ -134,7 +134,7 @@ impl<T: Resolve> ObjectDB<T> {
     /// NOTE that we cannot search through idx files that are unresolved...
     /// if you wish to search for ALL POSSIBLE matches, then you must
     /// resolve the idx files first.
-    pub fn try_find_match_from_partial(&self, partial_oid: Oid) -> PartialSearchResult {
+    pub fn try_find_match_from_partial(&self, partial_oid: PartialOid) -> PartialSearchResult {
         let loose_result = self.loose.try_find_match_from_partial(partial_oid);
 
         let mut collect_results = loose_result;

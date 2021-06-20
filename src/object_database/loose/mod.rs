@@ -97,11 +97,11 @@ impl<T: Resolve> PartiallyResolvedLooseMap<T> {
     /// iterate all known keys, and return a partial search result
     /// which can be no matches found, exactly 1 match found,
     /// or multiple matches found.
-    pub fn try_find_match_from_partial(&self, partial_oid: Oid) -> PartialSearchResult {
+    pub fn try_find_match_from_partial(&self, partial_oid: PartialOid) -> PartialSearchResult {
         let mut found = vec![];
         for key in self.map.keys() {
             let key = *key;
-            if key & partial_oid == partial_oid {
+            if partial_oid.matches(key) {
                 found.push(key);
             }
         }

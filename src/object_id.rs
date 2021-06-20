@@ -22,6 +22,50 @@ pub type OidTruncated = [u8; 16];
 /// an OidTruncated which can be turned into an Oid
 pub type OidStrTruncated = [u8; 32];
 
+#[derive(Debug, Copy, Clone)]
+pub struct PartialOid {
+    pub oid: Oid,
+    pub shift_by: usize,
+    pub oid_shifted: u128,
+}
+
+impl PartialOid {
+    pub fn from_hash(hash: &str) -> io::Result<PartialOid> {
+        let hash_len = hash.len();
+        let (oid_str, bits_set) = if hash_len < 32 {
+            // not enough bytes, so we need to add 0s to
+            // the end:
+            let mut oid_str = OidStrTruncated::default();
+            oid_str[0..hash_len].copy_from_slice(&hash[..].as_bytes());
+            let zeros = vec![b'0'; 32 - hash_len];
+            oid_str[hash_len..].copy_from_slice(&zeros[..]);
+            (oid_str, hash_len * 4)
+        } else {
+            // we have enough bytes, copy the entire 32
+            let mut oid_str = OidStrTruncated::default();
+            oid_str[..].copy_from_slice(&hash[0..32].as_bytes());
+            (oid_str, 32 * 4)
+        };
+        let oid = oid_str_truncated_to_oid(oid_str)?;
+        // because an Oid is 128 bits, the number of bits set
+        // is less than 128, so 128 - bits_set
+        // tells us how many bits we need to shift an actual oid by
+        // in order to compare it to this partial oid.
+        let shift_by = 128 - bits_set;
+        let shifted = oid >> shift_by;
+        Ok(PartialOid {
+            oid,
+            shift_by,
+            oid_shifted: shifted,
+        })
+    }
+
+    pub fn matches(&self, oid: Oid) -> bool {
+        let shifted = oid >> self.shift_by;
+        self.oid_shifted == shifted
+    }
+}
+
 pub fn hex_u128_to_str(h: Oid) -> String {
     let hash_str = format!("{:x}", h);
     // an oid is 128 bits, so should be 32 hex chars.
