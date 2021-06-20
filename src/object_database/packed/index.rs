@@ -1,6 +1,6 @@
 use std::{path::{Path, PathBuf}, io, fmt::Debug, mem::size_of};
 use byteorder::{BigEndian, ByteOrder};
-use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_oid_to_u128_oid, full_slice_oid_to_u128_oid, full_oid_from_str, OidFull}, ioerr};
+use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_oid_to_u128_oid, full_slice_oid_to_u128_oid, full_oid_from_str, OidFull, hex_u128_to_str}, ioerr};
 use memmap2::Mmap;
 use super::{parse_pack_or_idx_id, PartiallyResolvedPackFile};
 
@@ -80,6 +80,67 @@ impl IDXFile {
         }
 
         Ok(None)
+    }
+
+    pub fn get_all_oids(&self) -> Vec<Oid> {
+        let mut oids = Vec::with_capacity(self.num_objects as usize);
+        match self.version {
+            // if we are a v2 idx file, then we just need to
+            // go past the header/fanout table, and
+            // then iterate 20 bytes at a time, each 20 bytes
+            // is a full oid of an object that is in this idx file.
+            IDXVersion::V2 => {
+                let mut start_index = V2_HEADER_SIZE;
+                for _ in 0..self.num_objects {
+                    let desired_range = start_index..(start_index + SHA1_SIZE);
+                    let full_sha = self.mmapped_file.get(desired_range);
+                    match full_sha {
+                        Some(sha_data) => {
+                            // now create the oid from it:
+                            let oid = full_slice_oid_to_u128_oid(sha_data);
+                            oids.push(oid);
+                        }
+                        None => {
+                            // if we reached a point in the file
+                            // where we cant get any more bytes,
+                            // we can stop iterating here:
+                            break;
+                        }
+                    }
+                    start_index += SHA1_SIZE;
+                }
+            }
+            IDXVersion::V1 => {
+                // theres 4 bytes of offset in each entry in v1 idx files.
+                // so we skip the 4 bytes, get the next 20 bytes as the sha,
+                // and then go ahead another 24 bytes to get the next one.
+                let mut start_index = V1_HEADER_SIZE + FANOUT_ENTRY_SIZE;
+                for _ in 0..self.num_objects {
+                    let desired_range = start_index..(start_index + SHA1_SIZE);
+                    let full_sha = self.mmapped_file.get(desired_range);
+                    match full_sha {
+                        Some(sha_data) => {
+                            // now create the oid from it:
+                            let oid = full_slice_oid_to_u128_oid(sha_data);
+                            oids.push(oid);
+                        }
+                        None => {
+                            // if we reached a point in the file
+                            // where we cant get any more bytes,
+                            // we can stop iterating here:
+                            break;
+                        }
+                    }
+                    start_index += SHA1_SIZE + FANOUT_ENTRY_SIZE;
+                }
+            }
+        }
+
+        debug_assert!(
+            oids.len() as u32 == self.num_objects,
+            "Number of OIDs found is not what was expected"
+        );
+        oids
     }
 
     pub fn find_packfile_index_for(&self, index: usize) -> Option<u64> {
