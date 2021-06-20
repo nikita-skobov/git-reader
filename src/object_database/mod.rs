@@ -1,5 +1,5 @@
 use std::{path::Path, io};
-use crate::{ioerre, object_id::{oid_full_to_string, Oid, PartialOid}, ioerr};
+use crate::{ioerre, object_id::{oid_full_to_string, Oid, PartialOid, hex_u128_to_str}, ioerr};
 
 pub mod loose;
 use loose::*;
@@ -32,6 +32,11 @@ pub struct ObjectDB<T: Resolve> {
     pub packs: Vec<PartiallyResolvedPackAndIndex>,
 }
 
+pub enum ReturnedObject<'a, T> {
+    Borrowed(&'a T),
+    Owned(T),
+}
+
 impl<T: Resolve> ObjectDB<T> {
     /// path should be the absolute path to the objects folder
     /// ie: /.../.git/objects/
@@ -62,11 +67,11 @@ impl<T: Resolve> ObjectDB<T> {
     /// because we are not mutable, so objects being not resolved
     /// is the same as them not existing... only use this
     /// if you resolved all objects ahead of time.
-    pub fn get_object<'a>(&'a self, oid: Oid) -> io::Result<&'a T::Object> {
+    pub fn get_object<'a>(&'a self, oid: Oid) -> io::Result<ReturnedObject<'a, T::Object>> {
         // first search if this oid is in the loose objects map
         let obj_in_loose = self.loose.get_object_existing(oid)?;
         if let Some(obj) = obj_in_loose {
-            return Ok(obj);
+            return Ok(ReturnedObject::Borrowed(obj));
         }
 
         // we failed to find it in the loose map, so now
@@ -76,6 +81,7 @@ impl<T: Resolve> ObjectDB<T> {
         // the index files beforehand.
         // If you want to optionally resolve the index files as we go, use
         // `get_object_mut` instead.
+        let oid_str = hex_u128_to_str(oid);
         for idx_pack in self.packs.iter() {
             let idx = match idx_pack {
                 PartiallyResolvedPackAndIndex::Unresolved(_) => {
@@ -85,23 +91,23 @@ impl<T: Resolve> ObjectDB<T> {
                 }
                 PartiallyResolvedPackAndIndex::IndexResolved(idx) => idx,
             };
-            let has_index = idx.find_index_for(oid)?;
-            if let Some(index) = has_index {
-                let idx_id_str = oid_full_to_string(idx.id);
-                eprintln!("Found {:0x} in {} @ index {}", oid, idx_id_str, index);
-                // TODO: what to do if we find it?
-                if let Some(i) = idx.find_packfile_index_for(index) {
-                    eprintln!("It should have a packfile offset of {}", i);
-                } else {
-                    eprintln!("Failed to find packfile index offset...");
-                }
-            } else {
-                let idx_id_str = oid_full_to_string(idx.id);
-                eprintln!("Not found in: {}", idx_id_str);
+            if !idx.contains_oid(oid) {
+                continue;
             }
+
+            // this idx contains our desired oid, so lets read it:
+            let idx_str = oid_full_to_string(idx.id);
+            eprintln!("YES, idx file {} contains our desired oid: {}", idx_str, oid_str);
+            let unparsed = idx.resolve_unparsed_object(oid)?;
+            let obj = T::make_object_from_unparsed(unparsed)?;
+            return Ok(ReturnedObject::Owned(obj));
         }
 
-        return ioerre!("Oid: {} not found. TODO: need to implement searching through pack file", oid);
+        return ioerre!("Oid: {} not found. TODO: need to implement searching through pack file", oid_str);
+    }
+
+    pub fn fully_resolve_all_packs(&mut self) -> io::Result<()> {
+        fully_resolve_all_packs(&mut self.packs)
     }
 
     /// iterates the vec of partially resolved packs,

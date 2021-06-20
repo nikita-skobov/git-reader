@@ -80,6 +80,34 @@ pub fn resolve_all_packs(
     Ok(())
 }
 
+/// In addition to loading the .idx files, this function
+/// will also initialize each packfile for each .idx file.
+/// it does not read the entire of the packfile, but just the header
+/// enough to know its a valid pack file.
+pub fn fully_resolve_all_packs(
+    packs: &mut Vec<PartiallyResolvedPackAndIndex>
+) -> io::Result<()> {
+    for pack in packs.iter_mut() {
+        match pack {
+            PartiallyResolvedPackAndIndex::Unresolved(path) => {
+                let mut idx = open_idx_file(&path)?;
+                // if we just opened it, it should be unresolved:
+                match idx.pack {
+                    PartiallyResolvedPackFile::Resolved(_) => {}
+                    PartiallyResolvedPackFile::Unresolved(pack_path) => {
+                        let idx_pack = open_pack_file(pack_path, idx.id)?;
+                        idx.pack = PartiallyResolvedPackFile::Resolved(idx_pack);
+                    }
+                }
+                *pack = PartiallyResolvedPackAndIndex::IndexResolved(idx);
+            }
+            // no need to do anything if its already resolved:
+            PartiallyResolvedPackAndIndex::IndexResolved(_) => {}
+        }
+    }
+    Ok(())
+}
+
 pub fn parse_pack_or_idx_id<P: AsRef<Path>>(
     path: P
 ) -> Option<OidFull> {
