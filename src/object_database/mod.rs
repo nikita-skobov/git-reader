@@ -52,11 +52,11 @@ impl<T: Resolve> ObjectDB<T> {
     /// get the object if we already resolved it,
     /// and if not, we will resolve it which is why we need to be
     /// mutable
-    pub fn get_object_mut<'a>(&'a mut self, oid: Oid) -> io::Result<&'a T::Object> {
+    pub fn get_object_mut<'a>(&'a mut self, oid: Oid) -> io::Result<ReturnedObject<'a, T::Object>> {
         // first search if this oid is in the loose objects map
         let obj_in_loose = self.loose.get_object(oid)?;
         match obj_in_loose {
-            Some(obj) => Ok(obj),
+            Some(obj) => Ok(ReturnedObject::Borrowed(obj)),
             None => {
                 return ioerre!("Oid: {} not found. TODO: need to implement searching through pack file", oid);
             }
