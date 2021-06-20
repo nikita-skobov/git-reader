@@ -1,8 +1,9 @@
-use std::{path::{Path, PathBuf}, io, fmt::Debug, mem::size_of};
+use std::{path::{Path, PathBuf}, io, fmt::Debug, mem::size_of, convert::TryInto};
 use byteorder::{BigEndian, ByteOrder};
-use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_oid_to_u128_oid, full_slice_oid_to_u128_oid, full_oid_from_str, OidFull, hex_u128_to_str, PartialOid}, ioerr, object_database::PartialSearchResult};
+use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_oid_to_u128_oid, full_slice_oid_to_u128_oid, full_oid_from_str, OidFull, hex_u128_to_str, PartialOid}, ioerr, object_database::{loose::UnparsedObject, PartialSearchResult}};
 use memmap2::Mmap;
 use super::{parse_pack_or_idx_id, PartiallyResolvedPackFile};
+use super::{find_encoded_length, PackFileObjectType, apply_delta};
 
 /// see: https://git-scm.com/docs/pack-format#_version_2_pack_idx_files_support_packs_larger_than_4_gib_and
 pub const V2_IDX_SIGNATURE: [u8; 4] = [255, b't', b'O', b'c'];
@@ -80,6 +81,18 @@ impl IDXFile {
         }
 
         Ok(None)
+    }
+
+    /// this function discards any errors and considers
+    /// them to be false, ie: if theres an error we
+    /// return false, because presumably if your oid required
+    /// us to read some index out of bounds somehow, then
+    /// that would mean this oid is not in this idx file.
+    pub fn contains_oid(&self, oid: Oid) -> bool {
+        match self.find_index_for(oid) {
+            Ok(Some(_)) => true,
+            _ => false,
+        }
     }
 
     pub fn get_all_oids(&self) -> Vec<Oid> {
@@ -233,6 +246,91 @@ impl IDXFile {
             0 => PartialSearchResult::FoundNone,
             1 => PartialSearchResult::FoundMatch(found_matches[0]),
             _ => PartialSearchResult::FoundMultiple(found_matches),
+        }
+    }
+
+    pub fn get_packfile_index_of_oid(&self, oid: Oid) -> io::Result<Option<usize>> {
+        let idx_index = self.find_index_for(oid)?;
+        let idx_index = match idx_index {
+            Some(i) => i,
+            None => return Ok(None),
+        };
+        // the idx_index is the index within the .idx file
+        // where we will find the index of the packfile object:
+        let pack_index = match self.find_packfile_index_for(idx_index) {
+            Some(i) => i,
+            None => return Ok(None),
+        };
+        let pack_index: usize = pack_index.try_into()
+            .map_err(|_| ioerr!("Failed to convert a .idx index offset to a valid packfile index"))?;
+
+        Ok(Some(pack_index))
+    }
+
+    /// this should only be called if you know
+    /// this oid is in this packfile. call `contains_oid` first
+    /// to know if its in here or not. Otherwise, this will
+    /// return an error if the oid is not in here, which for some
+    /// operations might not be an important error. ie: we don't
+    /// differentiate between real errors like failing to read a file
+    /// or getting an index out of bounds, vs an error of simply not
+    /// finding this oid.
+    /// ALSO it is an error to call this if the pack file has not been
+    /// resolved yet.
+    pub fn resolve_unparsed_object(&self, oid: Oid) -> io::Result<UnparsedObject> {
+        let pack_index = self.get_packfile_index_of_oid(oid)?;
+        let pack_index = pack_index.ok_or_else(|| ioerr!("Failed to find oid in {} this idx file", hex_u128_to_str(oid)))?;
+        let pack = match &self.pack {
+            PartiallyResolvedPackFile::Unresolved(p) => {
+                return ioerre!("Pack file {:?} has not been resolved yet", p);
+            }
+            PartiallyResolvedPackFile::Resolved(p) => p,
+        };
+        let (
+            obj_type,
+            obj_size,
+            obj_starts_at
+        ) = pack.get_object_type_and_len_at_index(pack_index)?;
+        let obj_size: usize = obj_size.try_into()
+        .map_err(|_| ioerr!("Failed to convert an object size ({}) into a usize", obj_size))?;
+
+        // the pack can resolve everything other than ref delta
+        // objects. we have to first find that base object
+        // and then pass it to the pack for it to resolve
+        // the deltas.
+        // for now, it is an error if this idx file does not
+        // contain the base object, but in the future
+        // there should be a way to locate a ref base object even
+        // if its not in this idx file.
+        if let PackFileObjectType::RefDelta(base_oid_full) = obj_type {
+            // first we try to load the base object:
+            let base_oid = full_oid_to_u128_oid(base_oid_full);
+            let base_oid_str = hex_u128_to_str(base_oid);
+            eprintln!("TRYING TO RESOLVE A BASE OBJ: {}", base_oid_str);
+            let unparsed_object = self.resolve_unparsed_object(base_oid)?;
+            let base_object_data = unparsed_object.payload;
+            let base_object_type = unparsed_object.object_type;
+
+            // next we load our data:
+            let this_object_data = pack.get_decompressed_data_from_index(obj_size, obj_starts_at)?;
+    
+            // for our data, we need to extract the length, which
+            // is again size encoded like the other cases:
+            let (_base_size, num_read) = find_encoded_length(&this_object_data)
+                .ok_or_else(|| ioerr!("Failed to find size of base object"))?;
+            let this_object_data = &this_object_data[num_read..];
+            let (our_size, num_read) = find_encoded_length(&this_object_data)
+                .ok_or_else(|| ioerr!("Failed to find size of object"))?;
+            let this_object_data = &this_object_data[num_read..];
+
+            let data_out = apply_delta(&base_object_data, this_object_data, our_size)?;
+            let unparsed_obj = UnparsedObject {
+                object_type: base_object_type,
+                payload: data_out
+            };
+            Ok(unparsed_obj)
+        } else {
+            pack.resolve_unparsed_object(obj_size, obj_starts_at, obj_type)
         }
     }
 }
