@@ -1,5 +1,5 @@
 use std::io;
-use git_walker::{ioerr, object_database::UnparsedObjectDB, object_id::{hex_u128_to_str, get_partial_oid_from_hash}};
+use git_walker::{ioerr, object_database::UnparsedObjectDB, object_id::{hex_u128_to_str}};
 use git_walker::object_database::PartialSearchResult;
 
 pub fn realmain() -> io::Result<()> {

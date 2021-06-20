@@ -1,5 +1,5 @@
 use std::io;
-use git_walker::{ioerr, object_database::UnparsedObjectDB, object_id::{hex_u128_to_str, get_partial_oid_from_hash}};
+use git_walker::{ioerr, object_database::UnparsedObjectDB, object_id::{hex_u128_to_str, PartialOid}};
 use git_walker::object_database::PartialSearchResult;
 
 pub fn realmain() -> io::Result<()> {
@@ -21,7 +21,7 @@ pub fn realmain() -> io::Result<()> {
         return Ok(());
     }
 
-    let partial_oid = get_partial_oid_from_hash(ambiguous_oid)?;
+    let partial_oid =  PartialOid::from_hash(ambiguous_oid)?;
     let result = odb.try_find_match_from_partial(partial_oid);
 
     match result {
