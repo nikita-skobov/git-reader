@@ -2,6 +2,7 @@ use crate::object_id::*;
 use crate::{fs_helpers, ioerre, ioerr};
 use std::path::{Path, PathBuf};
 use std::{io, collections::HashMap, fs::DirEntry};
+use super::PartialSearchResult;
 
 pub mod parsed;
 pub use parsed::*;
@@ -93,17 +94,22 @@ impl<T: Resolve> PartiallyResolvedLooseMap<T> {
         Ok(())
     }
 
-    /// iterate all Oid keys and return which key matches
-    /// your partial id. returns None if no match found
-    pub fn try_find_match_from_partial(&self, partial_oid: Oid) -> Option<Oid> {
+    /// iterate all known keys, and return a partial search result
+    /// which can be no matches found, exactly 1 match found,
+    /// or multiple matches found.
+    pub fn try_find_match_from_partial(&self, partial_oid: Oid) -> PartialSearchResult {
+        let mut found = vec![];
         for key in self.map.keys() {
             let key = *key;
             if key & partial_oid == partial_oid {
-                return Some(key);
+                found.push(key);
             }
         }
-
-        None
+        match found.len() {
+            0 => PartialSearchResult::FoundNone,
+            1 => PartialSearchResult::FoundMatch(found[0]),
+            _ => PartialSearchResult::FoundMultiple(found),
+        }
     }
 }
 

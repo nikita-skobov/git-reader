@@ -128,4 +128,57 @@ impl<T: Resolve> ObjectDB<T> {
         }
         Ok(())
     }
+
+    /// check through both the loose DB, and the packed DB
+    /// to find all possible matches of a partial oid.
+    /// NOTE that we cannot search through idx files that are unresolved...
+    /// if you wish to search for ALL POSSIBLE matches, then you must
+    /// resolve the idx files first.
+    pub fn try_find_match_from_partial(&self, partial_oid: Oid) -> PartialSearchResult {
+        let loose_result = self.loose.try_find_match_from_partial(partial_oid);
+
+        let mut collect_results = loose_result;
+        for pack in self.packs.iter() {
+            match pack {
+                PartiallyResolvedPackAndIndex::IndexResolved(idx) => {
+                    let idx_result = idx.try_find_match_from_partial(partial_oid);
+                    collect_results = collect_results.add(idx_result);
+                }
+                // cant check if it has an oid if its unresolved...
+                PartiallyResolvedPackAndIndex::Unresolved(_) => {}
+            }
+        }
+        collect_results
+    }
+}
+
+pub enum PartialSearchResult {
+    FoundMatch(Oid),
+    FoundMultiple(Vec<Oid>),
+    FoundNone,
+}
+
+impl PartialSearchResult {
+    pub fn add(self, other: PartialSearchResult) -> PartialSearchResult {
+        let mut my_vec = match self {
+            PartialSearchResult::FoundMatch(one) => vec![one],
+            PartialSearchResult::FoundMultiple(v) => v,
+            PartialSearchResult::FoundNone => vec![],
+        };
+        match other {
+            PartialSearchResult::FoundMatch(one) => {
+                my_vec.push(one);
+            }
+            PartialSearchResult::FoundMultiple(v) => {
+                my_vec.extend(v);
+            }
+            PartialSearchResult::FoundNone => {}
+        }
+
+        match my_vec.len() {
+            0 => PartialSearchResult::FoundNone,
+            1 => PartialSearchResult::FoundMatch(my_vec[0]),
+            _ => PartialSearchResult::FoundMultiple(my_vec),
+        }
+    }
 }
