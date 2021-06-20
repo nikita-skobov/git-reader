@@ -334,6 +334,11 @@ impl PackFile {
         eprintln!("Base object raw: {}", base_object_data.len());
         eprintln!("Our delta data: {}", this_object_data.len());
         eprintln!("We should be turned into a data of size: {}", our_size);
+
+        // eprintln!("Our delta data iter:");
+        // for byte in this_object_data {
+        //     eprintln!("{:#010b}", byte);
+        // }
         apply_delta(&base_object_data, this_object_data, our_size)
     }
 }
