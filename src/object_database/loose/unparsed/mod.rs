@@ -72,6 +72,10 @@ impl Resolve for PartiallyResolvedLooseObject {
             PartiallyResolvedLooseObject::Unresolved(path) => Ok(None),
         }
     }
+
+    fn make_object_from_unparsed(unparsed: UnparsedObject) -> io::Result<Self::Object> {
+        Ok(unparsed)
+    }
 }
 
 #[cfg(test)]

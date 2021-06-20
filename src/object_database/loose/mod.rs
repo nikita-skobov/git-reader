@@ -15,6 +15,7 @@ pub trait Resolve {
     fn unresolved(p: PathBuf) -> Self;
     fn resolve_or_return(&mut self) -> io::Result<Option<&Self::Object>>;
     fn return_if_resolved(&self) -> io::Result<Option<&Self::Object>>;
+    fn make_object_from_unparsed(unparsed: UnparsedObject) -> io::Result<Self::Object>;
 }
 
 /// git objects directory can have many loose

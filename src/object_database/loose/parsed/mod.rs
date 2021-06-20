@@ -48,23 +48,7 @@ impl<T: ParseCommit> Resolve for PartiallyParsedLooseObject<T> {
             PartiallyParsedLooseObject::Parsed(obj) => Ok(Some(obj)),
             PartiallyParsedLooseObject::Unresolved(path) => {
                 let unparsed = read_raw_object(path, false)?;
-                let obj = match unparsed.object_type {
-                    UnparsedObjectType::Tree => {
-                        let tree_obj = TreeObject::parse(&unparsed.payload)?;
-                        ParsedObject::Tree(tree_obj)
-                    }
-                    UnparsedObjectType::Commit => {
-                        let commit_obj = T::parse(&unparsed.payload)?;
-                        ParsedObject::Commit(commit_obj)
-                    }
-                    UnparsedObjectType::Blob => {
-                        ParsedObject::Blob(BlobObject {})
-                    }
-                    UnparsedObjectType::Tag => {
-                        ParsedObject::Tag(TagObject {})
-                    }
-                };
-
+                let obj = Self::make_object_from_unparsed(unparsed)?;
                 *self = PartiallyParsedLooseObject::Parsed(obj);
                 match self {
                     PartiallyParsedLooseObject::Parsed(obj) => Ok(Some(obj)),
@@ -79,5 +63,25 @@ impl<T: ParseCommit> Resolve for PartiallyParsedLooseObject<T> {
             PartiallyParsedLooseObject::Parsed(obj) => Ok(Some(obj)),
             PartiallyParsedLooseObject::Unresolved(_) => Ok(None)
         }
+    }
+
+    fn make_object_from_unparsed(unparsed: super::UnparsedObject) -> std::io::Result<Self::Object> {
+        let obj = match unparsed.object_type {
+            UnparsedObjectType::Tree => {
+                let tree_obj = TreeObject::parse(&unparsed.payload)?;
+                ParsedObject::Tree(tree_obj)
+            }
+            UnparsedObjectType::Commit => {
+                let commit_obj = T::parse(&unparsed.payload)?;
+                ParsedObject::Commit(commit_obj)
+            }
+            UnparsedObjectType::Blob => {
+                ParsedObject::Blob(BlobObject {})
+            }
+            UnparsedObjectType::Tag => {
+                ParsedObject::Tag(TagObject {})
+            }
+        };
+        Ok(obj)
     }
 }
