@@ -84,6 +84,23 @@ impl IDXFile {
 
     pub fn get_all_oids(&self) -> Vec<Oid> {
         let mut oids = Vec::with_capacity(self.num_objects as usize);
+        self.walk_all_oids(|oid| {
+            oids.push(oid);
+            // return false to indicate we dont want to
+            // stop searching
+            false
+        });
+        debug_assert!(
+            oids.len() as u32 == self.num_objects,
+            "Number of OIDs found is not what was expected"
+        );
+        oids
+    }
+
+    /// pass a callback that takes an oid that we found,
+    /// and returns true if you want to stop searching.
+    pub fn walk_all_oids(&self, cb: impl FnMut(Oid) -> bool) {
+        let mut cb = cb;
         match self.version {
             // if we are a v2 idx file, then we just need to
             // go past the header/fanout table, and
@@ -94,19 +111,21 @@ impl IDXFile {
                 for _ in 0..self.num_objects {
                     let desired_range = start_index..(start_index + SHA1_SIZE);
                     let full_sha = self.mmapped_file.get(desired_range);
-                    match full_sha {
+                    let should_stop_iterating = match full_sha {
                         Some(sha_data) => {
                             // now create the oid from it:
                             let oid = full_slice_oid_to_u128_oid(sha_data);
-                            oids.push(oid);
+                            let should_stop_iterating = cb(oid);
+                            should_stop_iterating
                         }
                         None => {
                             // if we reached a point in the file
                             // where we cant get any more bytes,
                             // we can stop iterating here:
-                            break;
+                            true
                         }
-                    }
+                    };
+                    if should_stop_iterating { break; }
                     start_index += SHA1_SIZE;
                 }
             }
@@ -118,29 +137,25 @@ impl IDXFile {
                 for _ in 0..self.num_objects {
                     let desired_range = start_index..(start_index + SHA1_SIZE);
                     let full_sha = self.mmapped_file.get(desired_range);
-                    match full_sha {
+                    let should_stop_iterating = match full_sha {
                         Some(sha_data) => {
                             // now create the oid from it:
                             let oid = full_slice_oid_to_u128_oid(sha_data);
-                            oids.push(oid);
+                            let should_stop_iterating = cb(oid);
+                            should_stop_iterating
                         }
                         None => {
                             // if we reached a point in the file
                             // where we cant get any more bytes,
                             // we can stop iterating here:
-                            break;
+                            true
                         }
-                    }
+                    };
+                    if should_stop_iterating { break; }
                     start_index += SHA1_SIZE + FANOUT_ENTRY_SIZE;
                 }
             }
         }
-
-        debug_assert!(
-            oids.len() as u32 == self.num_objects,
-            "Number of OIDs found is not what was expected"
-        );
-        oids
     }
 
     pub fn find_packfile_index_for(&self, index: usize) -> Option<u64> {
