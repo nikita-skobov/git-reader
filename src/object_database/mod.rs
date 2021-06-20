@@ -97,7 +97,6 @@ impl<T: Resolve> ObjectDB<T> {
 
             // this idx contains our desired oid, so lets read it:
             let idx_str = oid_full_to_string(idx.id);
-            eprintln!("YES, idx file {} contains our desired oid: {}", idx_str, oid_str);
             let unparsed = idx.resolve_unparsed_object(oid)?;
             let obj = T::make_object_from_unparsed(unparsed)?;
             return Ok(ReturnedObject::Owned(obj));
