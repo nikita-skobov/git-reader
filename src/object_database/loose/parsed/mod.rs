@@ -1,5 +1,5 @@
 
-use std::path::PathBuf;
+use std::{fmt::Display, path::PathBuf};
 use commit_object_parsing::ParseCommit;
 use super::{read_raw_object, Resolve};
 use super::UnparsedObjectType;
@@ -29,6 +29,17 @@ pub enum ParsedObject<T: ParseCommit> {
     Tree(TreeObject),
     Blob(BlobObject),
     Tag(TagObject),
+}
+
+impl<T: ParseCommit> Display for ParsedObject<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParsedObject::Commit(c) => write!(f, "{}", c),
+            ParsedObject::Tree(t) => write!(f, "{}", t),
+            ParsedObject::Blob(_) => write!(f, "blobs not impl yet"),
+            ParsedObject::Tag(_) => write!(f, "tags not impl yet"),
+        }
+    }
 }
 
 pub enum PartiallyParsedLooseObject<T: ParseCommit> {

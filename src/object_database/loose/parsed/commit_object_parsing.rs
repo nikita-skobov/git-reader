@@ -1,7 +1,7 @@
-use crate::{ioerre, object_id::{Oid}, ioerr};
-use std::io;
+use crate::{ioerre, object_id::{Oid, hex_u128_to_str}, ioerr};
+use std::{fmt::Display, io};
 
-pub trait ParseCommit {
+pub trait ParseCommit: Display {
     fn parse_inner(
         raw: &[u8],
         current_index: &mut usize
@@ -47,6 +47,26 @@ pub struct CommitOnlyTreeAndParents {
     pub parent_one: Oid,
     pub parent_two: Oid,
     pub extra_parents: Vec<Oid>,
+}
+
+impl Display for CommitOnlyTreeAndParents {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tree_id_str = hex_u128_to_str(self.tree);
+        let parent_str = if self.parent_one == 0 {
+            "".into()
+        } else {
+            format!("parent {}", hex_u128_to_str(self.parent_one))
+        };
+        let mut parent_str = if self.parent_two == 0 {
+            parent_str
+        } else {
+            format!("{}\nparent {}", parent_str, hex_u128_to_str(self.parent_two))
+        };
+        for parent in self.extra_parents.iter() {
+            parent_str = format!("{}\nparent {}", parent_str, hex_u128_to_str(*parent));
+        }
+        write!(f, "tree {}\n{}\n", tree_id_str, parent_str)
+    }
 }
 
 impl ParseCommit for CommitOnlyTreeAndParents {

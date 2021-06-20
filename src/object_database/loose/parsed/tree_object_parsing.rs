@@ -1,6 +1,6 @@
 
-use crate::{ioerr, object_id::{OidTruncated, Oid, trunc_oid_to_u128_oid}, ioerre};
-use std::{convert::TryFrom, io};
+use crate::{ioerr, object_id::{OidTruncated, Oid, trunc_oid_to_u128_oid, hex_u128_to_str}, ioerre};
+use std::{convert::TryFrom, io, fmt::Display};
 
 
 /// See:
@@ -86,6 +86,27 @@ pub struct TreeEntry {
 #[derive(Debug, Default)]
 pub struct TreeObject {
     pub entries: Vec<TreeEntry>,
+}
+
+impl ToString for TreeEntry {
+    fn to_string(&self) -> String {
+        let mode_str = self.entry_mode.as_ref();
+        let blob_or_tree = if self.entry_mode.is_blob() {
+            "blob"
+        } else {
+            "tree"
+        };
+        let id_str = hex_u128_to_str(self.id);
+        format!("{} {} {}\t{}", mode_str, blob_or_tree, id_str, self.path_component)
+    }
+}
+
+impl Display for TreeObject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let entry_str = self.entries.iter().map(|e| e.to_string()).collect::<Vec<String>>()
+            .join("\n");
+        write!(f, "{}", entry_str)
+    }
 }
 
 pub fn get_tree_entry(raw: &[u8], curr: &mut usize) -> io::Result<TreeEntry> {
