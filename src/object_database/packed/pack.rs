@@ -208,7 +208,7 @@ impl PackFile {
             let desired_range = desired_range_start..(desired_range_start + try_read_size);
             let negative_offset_data = self.mmapped_file.get(desired_range)
                 .ok_or_else(|| ioerr!("Not enough bytes to read negative offset data from a delta offset object"))?;
-            let (distance, more_bytes_read) = find_encoded_length(&negative_offset_data)
+            let (distance, more_bytes_read) = find_negative_offset(&negative_offset_data)
                 .ok_or_else(|| ioerr!("Failed to parse negative offset data from a delta offset object"))?;
             if distance > index {
                 return ioerre!("Detected a offset delta object has a negative offset of {} bytes, but that is farther than the beginning of the file", distance);
@@ -330,15 +330,59 @@ impl PackFile {
             .ok_or_else(|| ioerr!("Failed to find size of object"))?;
         let this_object_data = &this_object_data[num_read..];
 
+        eprintln!("Going to look for delta data.");
+        eprintln!("Base object raw: {}", base_object_data.len());
+        eprintln!("Our delta data: {}", this_object_data.len());
+        eprintln!("We should be turned into a data of size: {}", our_size);
         apply_delta(&base_object_data, this_object_data, our_size)
+    }
+}
+
+/// algorithm borrowed from:
+/// https://github.com/speedata/gogit/blob/c5cbd8f9b7205cd5390219b532ca35d0f76b9eab/repository.go#L220
+/// Im not sure how/why this is different from
+/// `find_negative_offset`. I thought they were supposed to do the
+/// same thing but apparently not...
+#[inline(always)]
+pub fn find_encoded_length(d: &[u8]) -> Option<(usize, usize)> {
+    let mut num_bytes_read = 1;
+    let first_byte = d[0] as usize;
+    let mut value = first_byte & 0x7f;
+    if first_byte & 0b1000_0000 == 0 {
+        return Some((value, num_bytes_read))
+    }
+    
+    let mut shift = 0;
+    let mut found_0_msb = false;
+    for byte in &d[1..] {
+        let byte = *byte;
+        let mut should_break = false;
+        if byte & 0b1000_0000 == 0 {
+            should_break = true;
+        }
+
+        shift += 7;
+        value |= ((byte & 0x7f) as usize) << shift;
+        num_bytes_read += 1;
+
+        if should_break {
+            found_0_msb = true;
+            break;
+        }
+    }
+
+    if found_0_msb {
+        Some((value, num_bytes_read))
+    } else {
+        None
     }
 }
 
 /// algorithm borrowed from:
 /// https://github.com/Byron/gitoxide/blob/6200ed9ac5609c74de4254ab663c19cfe3591402/git-pack/src/data/entry/decode.rs#L99
 /// Returns length, and number of bytes read
-#[inline]
-fn find_encoded_length(d: &[u8]) -> Option<(usize, usize)> {
+#[inline(always)]
+pub fn find_negative_offset(d: &[u8]) -> Option<(usize, usize)> {
     let first_byte = d[0];
     let mut value = first_byte as usize & 0x7f;
     let mut num_bytes_read = 1;
