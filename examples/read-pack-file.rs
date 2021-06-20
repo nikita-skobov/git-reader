@@ -30,24 +30,30 @@ pub fn realmain() -> io::Result<()> {
     println!("compressed data starts at index {}", object_starts_at);
 
     let usize_len = length as usize;
-    let decompressed_data = packfile.get_decompressed_data_from_index(usize_len, object_starts_at)?;
-    println!("Got decompressed data successfully");
+    let (obj_type, obj_data) = packfile.get_raw_object_data_and_type(
+        usize_len, object_starts_at, obj_type)?;
+    println!("Successfully got back raw object data and type");
 
     match obj_type {
         object_database::packed::PackFileObjectType::Commit => {
-            let commit_obj = CommitOnlyTreeAndParents::parse(&decompressed_data[..])?;
+            let commit_obj = CommitOnlyTreeAndParents::parse(&obj_data)?;
             println!("{:#?}", commit_obj);
         }
         object_database::packed::PackFileObjectType::Tree => {
-            let tree_obj = TreeObject::parse(&decompressed_data[..])?;
+            let tree_obj = TreeObject::parse(&obj_data)?;
             println!("{:#?}", tree_obj);
         }
+        object_database::packed::PackFileObjectType::Blob => {
+            println!("Got back a blob... doing nothing");
+        }
+        object_database::packed::PackFileObjectType::Tag => {
+            println!("got back a tag.. doing nothing");
+        }
 
-        // dont care about these for now...
-        object_database::packed::PackFileObjectType::Blob => {}
-        object_database::packed::PackFileObjectType::Tag => {}
-        object_database::packed::PackFileObjectType::OfsDelta(_) => {}
-        object_database::packed::PackFileObjectType::RefDelta(_) => {}
+        object_database::packed::PackFileObjectType::OfsDelta(_) |
+        object_database::packed::PackFileObjectType::RefDelta(_) => {
+            panic!("Should not get back unresolved data...")
+        }
     }
 
     println!("Ran command in {}ms", right_now.elapsed().as_millis());

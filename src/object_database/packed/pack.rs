@@ -281,24 +281,26 @@ impl PackFile {
     /// Call this to either get a simple decompressed data of a commit/blob/tree/tag,
     /// or if we detected a delta object, then load the base object, resolve the delta,
     /// and then return the result raw object data.
-    pub fn get_raw_object_data(
+    /// also returns the type of the data returned. For everything other than
+    /// delta objects, this will be the same type as what was input.
+    /// But for delta objects, we don't know what our type is until
+    /// we resolve the base object, so that base object's type is returned.
+    pub fn get_raw_object_data_and_type(
         &self,
         decompressed_size: usize,
         starts_at: usize,
         object_type: PackFileObjectType,
-    ) -> io::Result<Vec<u8>> {
-        let (base_object_data, this_object_data) = match object_type {
+    ) -> io::Result<(PackFileObjectType, Vec<u8>)> {
+        let ((base_object_type, base_object_data), this_object_data) = match object_type {
             PackFileObjectType::OfsDelta(base_starts_at) => {
                 let (
                     next_obj_type,
                     next_obj_size,
                     next_obj_index
                 ) = self.get_object_type_and_len_at_index(base_starts_at)?;
-                // this should not resolve to another offset/ref delta right?
-                // if it does, this can become infinitely recursive...
                 let next_obj_size: usize = next_obj_size.try_into()
                     .map_err(|_| ioerr!("Failed to convert {} into a usize. Either we failed at parsing this value, or your architecture does not support numbers this large", next_obj_size))?;
-                let base_raw_data = self.get_raw_object_data(next_obj_size, next_obj_index, next_obj_type)?;
+                let base_raw_data = self.get_raw_object_data_and_type(next_obj_size, next_obj_index, next_obj_type)?;
                 let our_data = self.get_decompressed_data_from_index(decompressed_size, starts_at)?;
                 (base_raw_data, our_data)
             }
@@ -317,7 +319,8 @@ impl PackFile {
             PackFileObjectType::Tree |
             PackFileObjectType::Blob |
             PackFileObjectType::Tag => {
-                return self.get_decompressed_data_from_index(decompressed_size, starts_at)
+                let data = self.get_decompressed_data_from_index(decompressed_size, starts_at)?;
+                return Ok((object_type, data));
             }
         };
 
@@ -330,16 +333,12 @@ impl PackFile {
             .ok_or_else(|| ioerr!("Failed to find size of object"))?;
         let this_object_data = &this_object_data[num_read..];
 
-        eprintln!("Going to look for delta data.");
-        eprintln!("Base object raw: {}", base_object_data.len());
-        eprintln!("Our delta data: {}", this_object_data.len());
-        eprintln!("We should be turned into a data of size: {}", our_size);
-
-        // eprintln!("Our delta data iter:");
-        // for byte in this_object_data {
-        //     eprintln!("{:#010b}", byte);
-        // }
-        apply_delta(&base_object_data, this_object_data, our_size)
+        // eprintln!("Going to look for delta data.");
+        // eprintln!("Base object raw: {}", base_object_data.len());
+        // eprintln!("Our delta data: {}", this_object_data.len());
+        // eprintln!("We should be turned into a data of size: {}", our_size);
+        let data_out = apply_delta(&base_object_data, this_object_data, our_size)?;
+        Ok((base_object_type, data_out))
     }
 }
 
