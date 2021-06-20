@@ -1,5 +1,5 @@
 use std::{path::Path, io};
-use crate::{ioerre, object_id::{oid_full_to_string, Oid, PartialOid, hex_u128_to_str}, ioerr};
+use crate::{ioerre, object_id::{oid_full_to_string, Oid, PartialOid, hex_u128_to_str, full_oid_to_u128_oid}, ioerr};
 
 pub mod loose;
 use loose::*;
@@ -61,6 +61,31 @@ impl<T: Resolve> ObjectDB<T> {
                 return ioerre!("Oid: {} not found. TODO: need to implement searching through pack file", oid);
             }
         }
+    }
+
+    /// returns where an object is located.
+    /// if an object is found in the loose db, the same oid is
+    /// returned, otherwise, the oid of the packfile is returned
+    /// if not found, returns None
+    pub fn where_obj(&self, oid: Oid) -> Option<Oid> {
+        if self.loose.contains_oid(oid) {
+            return Some(oid);
+        }
+
+        for pack in self.packs.iter() {
+            match pack {
+                PartiallyResolvedPackAndIndex::IndexResolved(idx) => {
+                    if idx.contains_oid(oid) {
+                        let idx_oid = full_oid_to_u128_oid(idx.id);
+                        return Some(idx_oid);
+                    }
+                }
+                // cant check if it has an oid if its unresolved...
+                PartiallyResolvedPackAndIndex::Unresolved(_) => {}
+            }
+        }
+
+        None
     }
 
     /// get an object if it exists. We cannot resolve here
