@@ -1,18 +1,21 @@
-use std::{path::{Path, PathBuf}, io, fmt::Debug, mem::size_of, convert::TryInto, collections::{BTreeMap, HashMap}};
+use std::{path::{Path, PathBuf}, io, fmt::Debug, mem::size_of, convert::TryInto, collections::{BTreeMap, HashMap}, fs::File};
 use byteorder::{BigEndian, ByteOrder};
 use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_oid_to_u128_oid, full_slice_oid_to_u128_oid, full_oid_from_str, OidFull, hex_u128_to_str, PartialOid}, ioerr, object_database::{loose::UnparsedObject, PartialSearchResult}};
 use memmap2::Mmap;
 use super::{parse_pack_or_idx_id, PartiallyResolvedPackFile};
 use super::{find_encoded_length, PackFileObjectType, apply_delta, open_pack_file};
+use io::{Seek, Read, SeekFrom};
 
 /// see: https://git-scm.com/docs/pack-format#_version_2_pack_idx_files_support_packs_larger_than_4_gib_and
 pub const V2_IDX_SIGNATURE: [u8; 4] = [255, b't', b'O', b'c'];
+pub const V2_IDX_SIGNATURE_LEN: usize = 4;
 pub const V2_SKIP_VERSION_NUMBER_SIZE: usize = 4;
 pub const V2_IDX_VERSION_NUMBER_BYTES: [u8; 4] = [0, 0, 0, 2];
 pub const V2_IDX_VERSION_NUMBER: u32 = 2;
 pub const FANOUT_LENGTH: usize = 256;
 pub const FANOUT_ENTRY_SIZE: usize = 4;
 pub const SHA1_SIZE: usize = 20;
+pub const READ_INITIAL_BYTES: usize = V2_IDX_SIGNATURE_LEN + V2_SKIP_VERSION_NUMBER_SIZE + (FANOUT_ENTRY_SIZE * FANOUT_LENGTH);
 /// according to docs, it looks like trailer is just 2 checksums?
 pub const IDX_TRAILER_SIZE: usize = SHA1_SIZE * 2;
 pub const MINIMAL_IDX_FILE_SIZE: usize = IDX_TRAILER_SIZE + FANOUT_LENGTH * FANOUT_ENTRY_SIZE;
@@ -445,6 +448,125 @@ pub fn open_idx_file<P: AsRef<Path>>(
         pack: PartiallyResolvedPackFile::Unresolved(pack_file_path),
     };
     Ok(idxfile)
+}
+
+pub struct IDXFileLight {
+    pub fanout_table: [u32; 256],
+    // TODO: add this:
+    // pub id: OidFull,
+    pub version: IDXVersion,
+    pub num_objects: u32,
+    pub file: File,
+}
+
+impl IDXFileLight {
+    /// pass a callback that takes an oid that we found,
+    /// and returns true if you want to stop searching.
+    /// if start_byte is some byte, we look for it in the fanout table
+    /// and start our search there. Otherwise, if start_byte is None,
+    /// we traverse all oids. This function can be used for both collecting
+    /// all oids, or efficiently searching for a specific one.
+    pub fn walk_all_oids_from(&mut self, start_byte: Option<u8>, cb: impl FnMut(Oid) -> bool) {
+        let mut cb = cb;
+        let (start_index, seek_up) = match self.version {
+            // if we are a v2 idx file, then we just need to
+            // go past the header/fanout table, and
+            // then iterate 20 bytes at a time, each 20 bytes
+            // is a full oid of an object that is in this idx file.
+            IDXVersion::V2 => {
+                let start_index = V2_HEADER_SIZE;
+                (start_index, None)
+            }
+            IDXVersion::V1 => {
+                // theres 4 bytes of offset in each entry in v1 idx files.
+                // so we skip the 4 bytes, get the next 20 bytes as the sha,
+                // and then go ahead another 24 bytes to get the next one.
+                let start_index = V1_HEADER_SIZE + FANOUT_ENTRY_SIZE;
+                (start_index, Some(FANOUT_ENTRY_SIZE))
+            }
+        };
+
+        let start_index = if let Some(first_byte) = start_byte {
+            let first_byte = first_byte as usize;
+            let start_search = if first_byte > 0 {
+                self.fanout_table[first_byte - 1]
+            } else {
+                0
+            } as usize;
+            match self.version {
+                IDXVersion::V2 => V2_HEADER_SIZE + start_search * SHA1_SIZE,
+                IDXVersion::V1 => V1_HEADER_SIZE + start_search * (FANOUT_ENTRY_SIZE + SHA1_SIZE) + FANOUT_ENTRY_SIZE,
+            }
+        } else {
+            start_index
+        };
+
+        let seek_to_start = SeekFrom::Start(start_index as u64);
+        if let Err(_) = self.file.seek(seek_to_start) {
+            return;
+        }
+        for _ in 0..self.num_objects {
+            // we always read SHA1_SIZE:
+            let mut sha_bytes = [0; SHA1_SIZE];
+            if let Err(_) = self.file.read_exact(&mut sha_bytes) {
+                return;
+            }
+
+            let oid = full_slice_oid_to_u128_oid(&sha_bytes);
+            let should_stop_iterating = cb(oid);
+            if should_stop_iterating { break; }
+
+            // if V1, we have to seek ahead 4 bytes to skip
+            // the offsets, but in V2, we just read the next SHA
+            if let Some(skip_ahead) = seek_up {
+                let skip = SeekFrom::Current(skip_ahead as i64);
+                if let Err(_) = self.file.seek(skip) {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+pub fn open_idx_file_light<P: AsRef<Path>>(
+    path: P
+) -> io::Result<IDXFileLight> {
+    let mut fhandle = fs_helpers::get_readonly_handle(&path)?;
+    let metadata = fhandle.metadata()?;
+    let file_size = metadata.len() as usize;
+    if file_size < MINIMAL_IDX_FILE_SIZE {
+        return ioerre!("IDX file is too small to be a valid idx file");
+    }
+
+    // read enough bytes to check for v2 and the fanout table.
+    let mut read_bytes = [0; READ_INITIAL_BYTES];
+    fhandle.read_exact(&mut read_bytes)?;
+    let (version, num_objects, fanout_table) = if read_bytes[0..V2_IDX_SIGNATURE_LEN] == V2_IDX_SIGNATURE {
+        // 4 byte version number... docs say it has to be == 2,
+        // if we detected a V2 idx signature:
+        let version_bytes = &read_bytes[V2_IDX_SIGNATURE_LEN..(V2_IDX_SIGNATURE_LEN + V2_SKIP_VERSION_NUMBER_SIZE)];
+        let version_number = BigEndian::read_u32(&version_bytes);
+        if version_number != V2_IDX_VERSION_NUMBER {
+            return ioerre!("Invalid .idx version number. Expected version number of {}, found {}", V2_IDX_VERSION_NUMBER, version_number);
+        }
+        let mut fanout_table = [0; FANOUT_LENGTH];
+        fill_fan(&mut fanout_table, &read_bytes);
+        let num_objects = fanout_table[FANOUT_LENGTH - 1];
+        (IDXVersion::V2, num_objects, fanout_table)
+    } else {
+        let mut fanout_table = [0; FANOUT_LENGTH];
+        fill_fan(&mut fanout_table, &read_bytes);
+        let num_objects = fanout_table[FANOUT_LENGTH - 1];
+        (IDXVersion::V1, num_objects, fanout_table)
+    };
+
+    let out = IDXFileLight {
+        fanout_table,
+        version,
+        num_objects,
+        file: fhandle,
+    };
+    Ok(out)
 }
 
 
