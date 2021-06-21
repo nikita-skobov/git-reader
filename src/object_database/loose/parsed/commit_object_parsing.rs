@@ -20,7 +20,7 @@ pub trait ParseCommit: Display {
 /// will not need heap allocation, which should make
 /// us a lot faster at the cost of about 30% more memory usage.
 /// TODO: what other filtered versions do we want?
-/// TODO: implement parsing
+#[derive(Debug, Default)]
 pub struct CommitFull {
     pub tree: Oid,
     pub parent_one: Oid,
@@ -49,6 +49,26 @@ pub struct CommitOnlyTreeAndParents {
     pub extra_parents: Vec<Oid>,
 }
 
+impl Display for CommitFull {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tree_id_str = hex_u128_to_str(self.tree);
+        let parent_str = if self.parent_one == 0 {
+            "".into()
+        } else {
+            format!("parent {}", hex_u128_to_str(self.parent_one))
+        };
+        let mut parent_str = if self.parent_two == 0 {
+            parent_str
+        } else {
+            format!("{}\nparent {}", parent_str, hex_u128_to_str(self.parent_two))
+        };
+        for parent in self.extra_parents.iter() {
+            parent_str = format!("{}\nparent {}", parent_str, hex_u128_to_str(*parent));
+        }
+        write!(f, "tree {}\n{}\nauthor {}\ncommitter {}\n{}", tree_id_str, parent_str, self.author, self.committer, self.message)
+    }
+}
+
 impl Display for CommitOnlyTreeAndParents {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let tree_id_str = hex_u128_to_str(self.tree);
@@ -66,6 +86,32 @@ impl Display for CommitOnlyTreeAndParents {
             parent_str = format!("{}\nparent {}", parent_str, hex_u128_to_str(*parent));
         }
         write!(f, "tree {}\n{}\n", tree_id_str, parent_str)
+    }
+}
+
+impl ParseCommit for CommitFull {
+    fn parse_inner(
+        raw: &[u8],
+        current_index: &mut usize
+    ) -> io::Result<Self> where Self: Sized {
+        let only_tree_and_parents = CommitOnlyTreeAndParents::parse_inner(raw, current_index)?;
+
+        // the hard part is done, now we can just parse the committer/author
+        // and message
+        let author = parse_author(raw, current_index)?;
+        let committer = parse_committer(raw, current_index)?;
+        let message = String::from_utf8_lossy(&raw[*current_index..]);
+
+        let obj = CommitFull {
+            tree: only_tree_and_parents.tree,
+            parent_one: only_tree_and_parents.parent_one,
+            parent_two: only_tree_and_parents.parent_two,
+            extra_parents: only_tree_and_parents.extra_parents,
+            author,
+            committer,
+            message: message.into(),
+        };
+        Ok(obj)
     }
 }
 
@@ -107,6 +153,46 @@ impl ParseCommit for CommitOnlyTreeAndParents {
 
         Ok(out)
     }
+}
+
+pub fn parse_author(raw: &[u8], curr_index: &mut usize) -> io::Result<String> {
+    let start_index = *curr_index;
+    let desired_range = start_index..(start_index + 7);
+    let line = raw.get(desired_range)
+        .ok_or_else(|| ioerr!("First line not long enough to contain author string"))?;
+    if &line[0..7] != b"author " {
+        return ioerre!("Expected first line of author line to contain 'author'");
+    }
+    // this means we know the author string starts at index
+    // start_index + 7, so next, we find the nearest newline:
+    let rest_of_data = &raw[(start_index + 7)..];
+    let newline_index = rest_of_data.iter().position(|&b| b == b'\n')
+        .ok_or_else(|| ioerr!("Failed to find newline when parsing author line"))?;
+
+    let author_line = &rest_of_data[0..newline_index];
+    let author_str = String::from_utf8_lossy(author_line);
+    *curr_index = start_index + 7 + newline_index + 1;
+    Ok(author_str.into())
+}
+
+pub fn parse_committer(raw: &[u8], curr_index: &mut usize) -> io::Result<String> {
+    let start_index = *curr_index;
+    let desired_range = start_index..(start_index + 10);
+    let line = raw.get(desired_range)
+        .ok_or_else(|| ioerr!("First line not long enough to contain committer string"))?;
+    if &line[0..10] != b"committer " {
+        return ioerre!("Expected first line of committer line to contain 'committer'");
+    }
+    // this means we know the committer string starts at index
+    // start_index + 10, so next, we find the nearest newline:
+    let rest_of_data = &raw[(start_index + 10)..];
+    let newline_index = rest_of_data.iter().position(|&b| b == b'\n')
+        .ok_or_else(|| ioerr!("Failed to find newline when parsing committer line"))?;
+
+    let committer_line = &rest_of_data[0..newline_index];
+    let committer_str = String::from_utf8_lossy(committer_line);
+    *curr_index = start_index + 10 + newline_index + 1;
+    Ok(committer_str.into())
 }
 
 pub fn parse_tree(raw: &[u8]) -> io::Result<(Oid, usize)> {
