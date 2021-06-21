@@ -246,6 +246,10 @@ impl PackFile {
         }
     }
 
+    pub fn get_pack_size(&self) -> usize {
+        self.mmapped_file.len()
+    }
+
     /// return the decompressed data from an object at a given
     /// index. the `decompressed_size` should be the size of the output vec.
     /// Note: this ONLY decompressed data at an index and outputs

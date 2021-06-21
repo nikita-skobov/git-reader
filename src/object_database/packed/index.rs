@@ -1,4 +1,4 @@
-use std::{path::{Path, PathBuf}, io, fmt::Debug, mem::size_of, convert::TryInto};
+use std::{path::{Path, PathBuf}, io, fmt::Debug, mem::size_of, convert::TryInto, collections::{BTreeMap, HashMap}};
 use byteorder::{BigEndian, ByteOrder};
 use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_oid_to_u128_oid, full_slice_oid_to_u128_oid, full_oid_from_str, OidFull, hex_u128_to_str, PartialOid}, ioerr, object_database::{loose::UnparsedObject, PartialSearchResult}};
 use memmap2::Mmap;
@@ -68,6 +68,41 @@ impl IDXFile {
         let pack = open_pack_file(pack_path, self.id)?;
         self.pack = PartiallyResolvedPackFile::Resolved(pack);
         Ok(())
+    }
+
+    /// return a map of indices in the packfile -> Oid at that index.
+    /// Usually we are given an Oid and we want to find the index in the
+    /// packfile where the data is of this object. But we can also get a map of the
+    /// reverse. This is useful primarily for the verify-pack command
+    /// where we read through the pack file, and then we want to know which oid
+    /// is at the index we are reading.
+    pub fn get_index_oid_map(&self) -> io::Result<BTreeMap<usize, Oid>> {
+        let mut map = BTreeMap::new();
+
+        let mut err_str = String::with_capacity(0);
+        self.walk_all_oids(|oid| {
+            // TODO: this is actually inefficient, because
+            // if we are traversing the .idx file, we can already
+            // find the offset relative to the position that we found this oid...
+            // Im only doing this because of convenience...
+            match self.get_packfile_index_of_oid(oid) {
+                Ok(Some(i)) => {
+                    map.insert(i, oid);
+                }
+                Ok(None) => {
+                    err_str.push_str(&format!("\nFailed to find index of oid {}", hex_u128_to_str(oid)));
+                }
+                Err(e) => {
+                    err_str.push_str(&format!("\nError while trying to find index of oid {}\n{}", hex_u128_to_str(oid), e));
+                }
+            }
+            false
+        });
+
+        if !err_str.is_empty() {
+            return ioerre!("{}", err_str);
+        }
+        Ok(map)
     }
 
     pub fn find_index_for(&self, oid: Oid) -> io::Result<Option<usize>> {
