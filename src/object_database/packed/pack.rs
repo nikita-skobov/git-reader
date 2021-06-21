@@ -140,13 +140,8 @@ impl PackFile {
         // the first byte contains the type at the first
         // 4 bits, not including the MSB:
         let type_bits_mask = 0b0111_0000;
-        // TODO: technically we are not checking
-        // if the first byte has a 0 in its MSB, which
-        // would indicate we should stop reading bytes...
-        // is it possible an object's type and length
-        // can be stored entirely in 1 byte?
-        // ie: can an object have a length of 15 or less?
         let first_byte = try_parse_segment[0];
+        let msb_is_0 = first_byte & 0b1000_0000 == 0;
         let object_type_byte = first_byte & type_bits_mask;
         let object_type = PackFileObjectTypeInner::try_from(object_type_byte)?;
 
@@ -161,28 +156,37 @@ impl PackFile {
         let mut bytes_read = 1;
         // we just read the first byte above, so now
         // read every byte after it:
-        for byte in &try_parse_segment[1..] {
-            let byte = *byte;
-            let mut should_break = false;
-            if byte & 0b1000_0000 == 0 {
-                // we reached a byte whose MSB is a 0,
-                // therefore this is the last byte we should read
-                should_break = true;
+        if !msb_is_0 {
+            for byte in &try_parse_segment[1..] {
+                let byte = *byte;
+                let mut should_break = false;
+                if byte & 0b1000_0000 == 0 {
+                    // we reached a byte whose MSB is a 0,
+                    // therefore this is the last byte we should read
+                    should_break = true;
+                }
+    
+                let least_7_bits = (byte & 0b0111_1111) as u128;
+                // we shift it by the shift amount before
+                // adding it to the length:
+                length += least_7_bits << shift;
+                // since now we are reading 7 bits at a time,
+                // we shift the length by 7:
+                shift += 7;
+                bytes_read += 1;
+    
+                if should_break {
+                    found_last_byte = true;
+                    break;
+                }
             }
-
-            let least_7_bits = (byte & 0b0111_1111) as u128;
-            // we shift it by the shift amount before
-            // adding it to the length:
-            length += least_7_bits << shift;
-            // since now we are reading 7 bits at a time,
-            // we shift the length by 7:
-            shift += 7;
-            bytes_read += 1;
-
-            if should_break {
-                found_last_byte = true;
-                break;
-            }
+        } else {
+            // this condition means that we read 1 single byte
+            // to find the variable length. WOW how efficient!
+            // in 8 bits we found: the type of this object,
+            // whether or not to continue reading the variable length,
+            // and the length itself, which is stored in only 4 bits!
+            found_last_byte = true;
         }
 
         if !found_last_byte {
