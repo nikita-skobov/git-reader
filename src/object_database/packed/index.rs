@@ -3,7 +3,7 @@ use byteorder::{BigEndian, ByteOrder};
 use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_oid_to_u128_oid, full_slice_oid_to_u128_oid, full_oid_from_str, OidFull, hex_u128_to_str, PartialOid}, ioerr, object_database::{loose::UnparsedObject, PartialSearchResult}};
 use memmap2::Mmap;
 use super::{parse_pack_or_idx_id, PartiallyResolvedPackFile};
-use super::{find_encoded_length, PackFileObjectType, apply_delta};
+use super::{find_encoded_length, PackFileObjectType, apply_delta, open_pack_file};
 
 /// see: https://git-scm.com/docs/pack-format#_version_2_pack_idx_files_support_packs_larger_than_4_gib_and
 pub const V2_IDX_SIGNATURE: [u8; 4] = [255, b't', b'O', b'c'];
@@ -58,6 +58,18 @@ impl Debug for IDXFile {
 }
 
 impl IDXFile {
+    pub fn load_pack(&mut self) -> io::Result<()> {
+        let pack_path = match &self.pack {
+            PartiallyResolvedPackFile::Unresolved(p) => p,
+            // if already resolved, no need to do anything
+            PartiallyResolvedPackFile::Resolved(_) => return Ok(()),
+        };
+
+        let pack = open_pack_file(pack_path, self.id)?;
+        self.pack = PartiallyResolvedPackFile::Resolved(pack);
+        Ok(())
+    }
+
     pub fn find_index_for(&self, oid: Oid) -> io::Result<Option<usize>> {
         let first_byte = get_first_byte_of_oid(oid) as usize;
         let mut start_search = if first_byte > 0 {
