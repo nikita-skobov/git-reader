@@ -1,4 +1,4 @@
-use std::{path::PathBuf, io, collections::BTreeSet};
+use std::{path::PathBuf, io, collections::BTreeSet, time::Instant};
 use git_walker::{ioerr, object_database::UnparsedObjectDB, object_id::{hex_u128_to_str, PartialOid, hash_str_to_oid, Oid}};
 use git_walker::{printoid, object_database::{LightObjectDB, PartialSearchResult}, eprintoid};
 
@@ -9,6 +9,7 @@ pub fn realmain() -> io::Result<()> {
     let ambiguous_oid = args.get(2)
         .ok_or_else(|| ioerr!("Must provide an OID to search"))?;
 
+    let now = Instant::now();
     let odb = LightObjectDB::new(&path)?;
     let partial_oid =  PartialOid::from_hash(ambiguous_oid)?;
     let mut found_set = BTreeSet::new();
@@ -29,6 +30,7 @@ pub fn realmain() -> io::Result<()> {
             eprintoid!(found_oid);
         }
     }
+    println!("Elapsed: {}us", now.elapsed().as_micros());
     Ok(())
 }
 
