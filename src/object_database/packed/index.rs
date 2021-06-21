@@ -456,7 +456,7 @@ pub struct IDXFileLight {
     // pub id: OidFull,
     pub version: IDXVersion,
     pub num_objects: u32,
-    pub file: File,
+    pub file: Mmap,
 }
 
 impl IDXFileLight {
@@ -466,7 +466,7 @@ impl IDXFileLight {
     /// and start our search there. Otherwise, if start_byte is None,
     /// we traverse all oids. This function can be used for both collecting
     /// all oids, or efficiently searching for a specific one.
-    pub fn walk_all_oids_from(&mut self, start_byte: Option<u8>, cb: impl FnMut(Oid) -> bool) {
+    pub fn walk_all_oids_from(&self, start_byte: Option<u8>, cb: impl FnMut(Oid) -> bool) {
         let mut cb = cb;
         let (start_index, seek_up) = match self.version {
             // if we are a v2 idx file, then we just need to
@@ -486,7 +486,7 @@ impl IDXFileLight {
             }
         };
 
-        let start_index = if let Some(first_byte) = start_byte {
+        let mut start_index = if let Some(first_byte) = start_byte {
             let first_byte = first_byte as usize;
             let start_search = if first_byte > 0 {
                 self.fanout_table[first_byte - 1]
@@ -501,17 +501,9 @@ impl IDXFileLight {
             start_index
         };
 
-        let seek_to_start = SeekFrom::Start(start_index as u64);
-        if let Err(_) = self.file.seek(seek_to_start) {
-            return;
-        }
         for _ in 0..self.num_objects {
             // we always read SHA1_SIZE:
-            let mut sha_bytes = [0; SHA1_SIZE];
-            if let Err(_) = self.file.read_exact(&mut sha_bytes) {
-                return;
-            }
-
+            let sha_bytes = &self.file[start_index..(start_index + SHA1_SIZE)];
             let oid = full_slice_oid_to_u128_oid(&sha_bytes);
             let should_stop_iterating = cb(oid);
             if should_stop_iterating { break; }
@@ -519,10 +511,9 @@ impl IDXFileLight {
             // if V1, we have to seek ahead 4 bytes to skip
             // the offsets, but in V2, we just read the next SHA
             if let Some(skip_ahead) = seek_up {
-                let skip = SeekFrom::Current(skip_ahead as i64);
-                if let Err(_) = self.file.seek(skip) {
-                    return;
-                }
+                start_index += SHA1_SIZE + skip_ahead;
+            } else {
+                start_index += SHA1_SIZE;
             }
         }
     }
@@ -531,16 +522,15 @@ impl IDXFileLight {
 pub fn open_idx_file_light<P: AsRef<Path>>(
     path: P
 ) -> io::Result<IDXFileLight> {
-    let mut fhandle = fs_helpers::get_readonly_handle(&path)?;
-    let metadata = fhandle.metadata()?;
-    let file_size = metadata.len() as usize;
+    // let mut fhandle = fs_helpers::get_readonly_handle(&path)?;
+    let mmapped = fs_helpers::get_mmapped_file(path)?;
+    let file_size = mmapped.len() as usize;
     if file_size < MINIMAL_IDX_FILE_SIZE {
         return ioerre!("IDX file is too small to be a valid idx file");
     }
 
     // read enough bytes to check for v2 and the fanout table.
-    let mut read_bytes = [0; READ_INITIAL_BYTES];
-    fhandle.read_exact(&mut read_bytes)?;
+    let read_bytes = &mmapped[0..READ_INITIAL_BYTES];
     let (version, num_objects, fanout_table) = if read_bytes[0..V2_IDX_SIGNATURE_LEN] == V2_IDX_SIGNATURE {
         // 4 byte version number... docs say it has to be == 2,
         // if we detected a V2 idx signature:
@@ -564,7 +554,7 @@ pub fn open_idx_file_light<P: AsRef<Path>>(
         fanout_table,
         version,
         num_objects,
-        file: fhandle,
+        file: mmapped,
     };
     Ok(out)
 }
