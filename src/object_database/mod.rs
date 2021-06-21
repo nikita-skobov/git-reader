@@ -1,5 +1,5 @@
-use std::{path::Path, io};
-use crate::{ioerre, object_id::{oid_full_to_string, Oid, PartialOid, hex_u128_to_str, full_oid_to_u128_oid}, ioerr};
+use std::{path::{PathBuf, Path}, io, fs};
+use crate::{ioerre, object_id::{oid_full_to_string, Oid, PartialOid, hex_u128_to_str, full_oid_to_u128_oid, get_first_byte_of_oid, HEX_BYTES, hash_object_file_and_folder}, ioerr, fs_helpers};
 
 pub mod loose;
 use loose::*;
@@ -232,5 +232,180 @@ impl PartialSearchResult {
             1 => PartialSearchResult::FoundMatch(my_vec[0]),
             _ => PartialSearchResult::FoundMultiple(my_vec),
         }
+    }
+}
+
+
+pub const MAX_PATH_TO_DB_LEN: usize = 4096;
+
+/// get the ascii value of the platform's main seperator.
+/// / on Unix, \ on Windows
+pub fn main_sep_byte() -> u8 {
+    match std::path::MAIN_SEPARATOR {
+        // unix-like:
+        '/' => 47,
+        // otherwise windows:
+        _ => 92,
+    }
+}
+
+/// A fairly different interface than ObjectDB, the LightObjectDB
+/// tries to minimize allocations at the cost of potentially
+/// slightly slower performance. One key difference between the
+/// light object DB is that it does not load all paths of loose objects,
+/// instead, when you wish to load a loose object, it has to first
+/// check if that loose object exists by making a file system call.
+/// if done repeatedly, this would amount to significantly more calls
+/// than using a regular ObjectDB, but a LightObjectDB is better
+/// if you know you only need to lookup information once, as it requires
+/// less allocations
+pub struct LightObjectDB<'a> {
+    /// Should be absolute path to /.../.git/objects/
+    pub path_to_db: &'a str,
+    pub path_to_db_bytes: [u8; MAX_PATH_TO_DB_LEN],
+    pub path_to_db_bytes_start: usize,
+}
+
+impl<'a> LightObjectDB<'a> {
+    pub fn new(p: &'a str) -> io::Result<LightObjectDB<'a>> {
+        // hard to imagine a path would be longer than this right?...
+        let p_len = p.len();
+        // we probably wont extend the path_to_db by more than 60 chars ever...
+        let max_extend_by = 60;
+        if p_len >= MAX_PATH_TO_DB_LEN - max_extend_by {
+            return ioerre!("Path '{}' is too long for us to represent it without allocations", p);
+        }
+        // we create a static array that contains the utf8 bytes
+        // of the path string. We do this so that
+        // we can create path strings of other files in the object DB
+        // without allocating, ie: we can use this stack allocated
+        // array to create strings like {path_to_db}/pack-whatever...
+        let mut path_to_db_bytes = [0; MAX_PATH_TO_DB_LEN];
+        path_to_db_bytes[0..p_len].copy_from_slice(p.as_bytes());
+        path_to_db_bytes[p_len] = main_sep_byte();
+
+        let out = LightObjectDB {
+            path_to_db: p,
+            path_to_db_bytes,
+            path_to_db_bytes_start: p_len + 1,
+        };
+        Ok(out)
+    }
+
+    /// extend_by should be valid utf-8 slice.
+    /// we extend our self.path_to_db_bytes by the extend by slice
+    /// and return an array that can be turned into a stack
+    /// allocated string, as well as the index that you should
+    /// take the slice up to.
+    pub fn get_static_path_str(&self, extend_by: &[u8]) -> ([u8; MAX_PATH_TO_DB_LEN], usize) {
+        let mut stack_arr = self.path_to_db_bytes;
+        let extend_num = extend_by.len();
+        let take_slice_to = self.path_to_db_bytes_start + extend_num;
+        stack_arr[self.path_to_db_bytes_start..take_slice_to].copy_from_slice(extend_by);
+        (stack_arr, take_slice_to)
+    }
+
+    pub fn find_matching_oids_loose<F>(
+        &self,
+        partial_oid: PartialOid,
+        cb: &mut F,
+    ) -> io::Result<()>
+        where F: FnMut(Oid)
+    {
+        let first_byte = get_first_byte_of_oid(partial_oid.oid) as usize;
+        let hex_first_byte: [u8; 2] = HEX_BYTES[first_byte];
+        let (big_str_array, take_index) = self.get_static_path_str(&hex_first_byte);
+        let search_path_str = std::str::from_utf8(&big_str_array[0..take_index])
+            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
+        
+        // we know all of these HEX_BYTES are valid utf-8 sequences
+        // so we can unwrap:
+        let hex_str = std::str::from_utf8(&hex_first_byte).unwrap();
+        let _ = fs_helpers::search_folder(&search_path_str, |entry| -> Option<()> {
+            let entryname = entry.file_name();
+            if let Some(s) = entryname.to_str() {
+                if let Ok(oid) = hash_object_file_and_folder(hex_str, &s) {
+                    if partial_oid.matches(oid) {
+                        cb(oid);
+                    }
+                }
+            }
+            // TODO: otherwise if we failed to get str, should
+            // we treat that as an error?
+            None
+        });
+        Ok(())
+    }
+
+    pub fn read_idx_file(
+        &self,
+        idx_file_name: &str,
+    ) -> io::Result<IDXFileLight> {
+        let packs_dir = b"pack";
+        let (mut big_str_array, take_index) = self.get_static_path_str(packs_dir);
+        big_str_array[take_index] = main_sep_byte();
+        let file_name_len = idx_file_name.len();
+        let new_size = take_index + 1 + file_name_len;
+        let desired_range = (take_index + 1)..new_size;
+        big_str_array[desired_range].copy_from_slice(idx_file_name.as_bytes());
+        let search_path_str = std::str::from_utf8(&big_str_array[0..new_size])
+            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
+        // println!("reading idx file: {}", search_path_str);
+        let idx_file = open_idx_file_light(search_path_str)?;
+        Ok(idx_file)
+    }
+
+    pub fn find_matching_oids_packed<F>(
+        &self,
+        partial_oid: PartialOid,
+        cb: &mut F,
+    ) -> io::Result<()>
+        where F: FnMut(Oid)
+    {
+        // first we load every .idx file we find in the database/packs
+        // directory
+        let partial_oid_first_byte = get_first_byte_of_oid(partial_oid.oid);
+        let packs_dir = b"pack";
+        let (big_str_array, take_index) = self.get_static_path_str(packs_dir);
+        let search_path_str = std::str::from_utf8(&big_str_array[0..take_index])
+            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
+        // println!("Searching {}", search_path_str);
+        fs_helpers::search_folder(&search_path_str, |entry| -> Option<()> {
+            let filename = entry.file_name();
+            if let Some(s) = filename.to_str() {
+                if s.ends_with(".idx") {
+                    if let Ok(mut idx_file) = self.read_idx_file(s) {
+                        idx_file.walk_all_oids_from(Some(partial_oid_first_byte), |oid| {
+                            let found_oid_first_byte = get_first_byte_of_oid(oid);
+                            if partial_oid.matches(oid) {
+                                cb(oid);
+                            }
+                            // if the oid first byte that we just found in the file
+                            // is greater than the first byte of our
+                            // partial oid, this means we can stop reading
+                            // because the .idx file is sorted by oid.
+                            found_oid_first_byte > partial_oid_first_byte
+                            // false
+                        });
+                    }
+                }
+            }
+            None
+        })?;
+        Ok(())
+    }
+
+    pub fn find_matching_oids<F>(
+        &self,
+        partial_oid: PartialOid,
+        cb: F,
+    ) -> io::Result<()>
+        where F: FnMut(Oid)
+    {
+        let mut cb = cb;
+        self.find_matching_oids_loose(partial_oid, &mut cb)?;
+        self.find_matching_oids_packed(partial_oid, &mut cb)?;
+
+        Ok(())
     }
 }
