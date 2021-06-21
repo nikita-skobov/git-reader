@@ -28,6 +28,19 @@ impl Default for OidStrTruncated {
     }
 }
 
+#[macro_export]
+macro_rules! printoid {
+    ($oid: tt) => {
+        println!("{:032x}", $oid)
+    };
+}
+#[macro_export]
+macro_rules! eprintoid {
+    ($oid: tt) => {
+        eprintln!("{:032x}", $oid)
+    };
+}
+
 #[derive(Debug, Default, Copy, Clone)]
 pub struct PartialOid {
     pub oid: Oid,
