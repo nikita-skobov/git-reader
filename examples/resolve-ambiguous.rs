@@ -1,6 +1,6 @@
-use std::io;
-use git_walker::{ioerr, object_database::UnparsedObjectDB, object_id::{hex_u128_to_str, PartialOid}};
-use git_walker::object_database::PartialSearchResult;
+use std::{path::PathBuf, io, collections::BTreeSet};
+use git_walker::{ioerr, object_database::UnparsedObjectDB, object_id::{hex_u128_to_str, PartialOid, hash_str_to_oid, Oid}};
+use git_walker::{printoid, object_database::{LightObjectDB, PartialSearchResult}, eprintoid};
 
 pub fn realmain() -> io::Result<()> {
     let args = std::env::args().collect::<Vec<_>>();
@@ -9,38 +9,26 @@ pub fn realmain() -> io::Result<()> {
     let ambiguous_oid = args.get(2)
         .ok_or_else(|| ioerr!("Must provide an OID to search"))?;
 
-    let mut odb = UnparsedObjectDB::new(path)?;
-    // need to resolve/load the .idx files in order
-    // to search all oids
-    odb.resolve_all_index_files()?;
-    if ambiguous_oid.len() >= 32 {
-        // we cannot resolve anything more than 32 bytes
-        // because we only store/parse Oids up to 32 hex chars
-        // ie: 16 bytes. This is as unambiguous as it gets.
-        println!("{}", ambiguous_oid);
-        return Ok(());
-    }
-
+    let odb = LightObjectDB::new(&path)?;
     let partial_oid =  PartialOid::from_hash(ambiguous_oid)?;
-    let result = odb.try_find_match_from_partial(partial_oid);
+    let mut found_set = BTreeSet::new();
+    odb.find_matching_oids(partial_oid, |oid| {
+        found_set.insert(oid);
+    })?;
 
-    match result {
-        PartialSearchResult::FoundMatch(exact) => {
-            println!("{}", exact);
-        }
-        PartialSearchResult::FoundMultiple(matches) => {
-            eprintln!("{} is too ambiguous. Found matches:", ambiguous_oid);
-            for id in matches {
-                let id_str = hex_u128_to_str(id);
-                eprintln!("{}", id_str);
-            }
-        }
-        PartialSearchResult::FoundNone => {
-            eprintln!("Failed to find any matches for {}", ambiguous_oid);
+    let found_len = found_set.len();
+    if found_len == 0 {
+        eprintln!("Failed to find object matching {}", ambiguous_oid);
+    } else if found_len == 1 {
+        let found = found_set.iter().next().unwrap();
+        printoid!(found);
+    } else {
+        eprintln!("Error: '{}' is too ambiguous", ambiguous_oid);
+        eprintln!("hint: The candidates are:");
+        for found_oid in found_set.iter() {
+            eprintoid!(found_oid);
         }
     }
-
-
     Ok(())
 }
 
