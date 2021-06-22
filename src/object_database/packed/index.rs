@@ -452,8 +452,7 @@ pub fn open_idx_file<P: AsRef<Path>>(
 
 pub struct IDXFileLight {
     pub fanout_table: [u32; 256],
-    // TODO: add this:
-    // pub id: OidFull,
+    pub id: OidFull,
     pub version: IDXVersion,
     pub num_objects: usize,
     pub file: Mmap,
@@ -670,7 +669,7 @@ pub fn open_idx_file_light<P: AsRef<Path>>(
     path: P
 ) -> io::Result<IDXFileLight> {
     // let mut fhandle = fs_helpers::get_readonly_handle(&path)?;
-    let mmapped = fs_helpers::get_mmapped_file(path)?;
+    let mmapped = fs_helpers::get_mmapped_file(&path)?;
     let file_size = mmapped.len() as usize;
     if file_size < MINIMAL_IDX_FILE_SIZE {
         return ioerre!("IDX file is too small to be a valid idx file");
@@ -700,11 +699,15 @@ pub fn open_idx_file_light<P: AsRef<Path>>(
         (IDXVersion::V1, num_objects, fanout_table)
     };
 
+    let idx_id = parse_pack_or_idx_id(path)
+        .ok_or_else(|| ioerr!("Failed to parse idx idx"))?;
+
     let out = IDXFileLight {
         fanout_table,
         version,
         num_objects,
         file: mmapped,
+        id: idx_id,
     };
     Ok(out)
 }
