@@ -496,6 +496,56 @@ impl IDXFileLight {
         V1_HEADER_SIZE + FANOUT_ENTRY_SIZE + (fanout_index * (FANOUT_ENTRY_SIZE + SHA1_SIZE))
     }
 
+    /// given a fanout_index, (ie: I want the 3rd Oid => fanout_index = 3),
+    /// find the offset of where that object begins in the associated packfile.
+    /// for V1 .idx files, this is simply the 4 bytes that come directly before
+    /// the Oid. eg: if you want the 3rd Oid, you navigate to the 3rd entry, and
+    /// the entry looks like:
+    /// [4 byte packfile offset][oid_03] // 4 + 20 bytes.
+    /// so here we want to read these first 4 bytes in network order.
+    #[inline(always)]
+    pub fn find_packfile_index_from_fanout_index_v1(&self, fanout_index: usize) -> Option<usize> {
+        let oid_start = self.get_oid_starting_index_from_fanout_index_v1(fanout_index);
+        // we subtract 4 because we dont want the oid index, but the 4 bytes before the oid:
+        let offset_start = oid_start - FANOUT_ENTRY_SIZE;
+        let desired_range = offset_start..oid_start;
+        let desired_bytes = &self.file.get(desired_range)?;
+        Some(BigEndian::read_u32(desired_bytes) as usize)
+    }
+
+    /// given a fanout_index, (ie: I want the 4th Oid => fanout_index = 4),
+    /// find the offset of where that object begins in the associated pakcfile.
+    /// for V2 .idx files, this involves reading from the end section of the .idx file
+    /// where theres a table of 4 byte values, and each of these values is actually 31 bits.
+    /// if the MSB is set, then that indicates we should actually read from the next table
+    /// which has 8 byte offsets.
+    #[inline(always)]
+    pub fn find_packfile_index_from_fanout_index_v2(&self, fanout_index: usize) -> Option<u64> {
+        let oid_table_starts_at = V2_HEADER_SIZE + (FANOUT_ENTRY_SIZE * FANOUT_LENGTH);
+        let crc_table_starts_at = oid_table_starts_at + (self.num_objects * SHA1_SIZE);
+        let four_byte_offset_table_starts_at = crc_table_starts_at + (self.num_objects * FANOUT_ENTRY_SIZE);
+
+        let this_entry_starts = four_byte_offset_table_starts_at + (fanout_index * FANOUT_ENTRY_SIZE);
+        let desired_range = this_entry_starts..(this_entry_starts + FANOUT_ENTRY_SIZE);
+        let desired_bytes = self.file.get(desired_range)?;
+        let four_byte_offset = BigEndian::read_u32(&desired_bytes);
+        // if the MSB is not set, then we are done. the value we
+        // read is the offset in the packfile
+        if four_byte_offset & 0b10000000_00000000_00000000_00000000 == 0 {
+            return Some(four_byte_offset as u64);
+        }
+
+        // otherwise, the MSB is set, so now we treat this four_byte_offset
+        // as actually the index of the 8 byte table:
+        // first we need to remove that MSB:
+        let eight_byte_table_index = four_byte_offset ^ 0b10000000_00000000_00000000_00000000;
+        let eight_byte_table_starts_at = four_byte_offset_table_starts_at + (self.num_objects * FANOUT_ENTRY_SIZE);
+        let this_entry_starts = eight_byte_table_starts_at + (eight_byte_table_index as usize) * N64_SIZE;
+        let desired_range = this_entry_starts..(this_entry_starts + N64_SIZE);
+        let desired_bytes = self.file.get(desired_range)?;
+        Some(BigEndian::read_u64(desired_bytes))
+    }
+
     /// pass a callback that takes an oid that we found,
     /// and returns true if you want to stop searching.
     /// if start_byte is some byte, we look for it in the fanout table
