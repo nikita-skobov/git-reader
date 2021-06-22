@@ -385,12 +385,16 @@ impl<'a> LightObjectDB<'a> {
         let hex_str = std::str::from_utf8(&hex_first_byte).unwrap();
         let _ = fs_helpers::search_folder(&search_path_str, |entry| -> Option<()> {
             let entryname = entry.file_name();
-            if let Some(s) = entryname.to_str() {
-                if let Ok(oid) = hash_object_file_and_folder(hex_str, &s) {
-                    if partial_oid.matches(oid) {
-                        cb(oid);
-                    }
-                }
+            let filename = match entryname.to_str() {
+                Some(s) => s,
+                None => return None,
+            };
+            let oid = match hash_object_file_and_folder(hex_str, &filename) {
+                Ok(o) => o,
+                Err(_) => { return None; }
+            };
+            if partial_oid.matches(oid) {
+                cb(oid);
             }
             // TODO: otherwise if we failed to get str, should
             // we treat that as an error?
@@ -423,20 +427,22 @@ impl<'a> LightObjectDB<'a> {
         let _ = fs_helpers::search_folder(&search_path_str, |entry| -> Option<()> {
             if stop_searching { return None; }
             let entryname = entry.file_name();
-            if let Some(s) = entryname.to_str() {
-                if let Ok(oid) = hash_object_file_and_folder(hex_str, &s) {
-                    if partial_oid.matches(oid) {
-                        // if we found a match, lets construct
-                        // a pathbuf from our current search folder,
-                        // and the filename of what we found:
-                        let mut full_pathbuf = PathBuf::from(search_path_str);
-                        full_pathbuf.push(s);
-                        stop_searching = cb(oid, FoundObjectLocation::FoundLoose(full_pathbuf));
-                    }
-                }
+            let filename = match entryname.to_str() {
+                Some(s) => s,
+                None => return None,
+            };
+            let oid = match hash_object_file_and_folder(hex_str, &filename) {
+                Ok(o) => o,
+                Err(_) => { return None; }
+            };
+            if partial_oid.matches(oid) {
+                // if we found a match, lets construct
+                // a pathbuf from our current search folder,
+                // and the filename of what we found:
+                let mut full_pathbuf = PathBuf::from(search_path_str);
+                full_pathbuf.push(filename);
+                stop_searching = cb(oid, FoundObjectLocation::FoundLoose(full_pathbuf));
             }
-            // TODO: otherwise if we failed to get str, should
-            // we treat that as an error?
             None
         });
         Ok(())
@@ -477,24 +483,32 @@ impl<'a> LightObjectDB<'a> {
         // println!("Searching {}", search_path_str);
         fs_helpers::search_folder(&search_path_str, |entry| -> Option<()> {
             let filename = entry.file_name();
-            if let Some(s) = filename.to_str() {
-                if s.ends_with(".idx") {
-                    if let Ok(idx_file) = self.read_idx_file(s) {
-                        idx_file.walk_all_oids_from(Some(partial_oid_first_byte), |oid| {
-                            let found_oid_first_byte = get_first_byte_of_oid(oid);
-                            if partial_oid.matches(oid) {
-                                cb(oid);
-                            }
-                            // if the oid first byte that we just found in the file
-                            // is greater than the first byte of our
-                            // partial oid, this means we can stop reading
-                            // because the .idx file is sorted by oid.
-                            found_oid_first_byte > partial_oid_first_byte
-                            // false
-                        });
-                    }
-                }
+            let filename = match filename.to_str() {
+                Some(s) => s,
+                None => return None,
+            };
+            if ! filename.ends_with(".idx") {
+                return None;
             }
+            let idx_file = match self.read_idx_file(filename) {
+                Ok(f) => f,
+                // TODO: should we stop all iteration
+                // if a single idx file failed to read?
+                // I think not? so here I just return None
+                // and continue the iteration at the next idx filename
+                Err(_) => { return None },
+            };
+            idx_file.walk_all_oids_from(Some(partial_oid_first_byte), |oid| {
+                let found_oid_first_byte = get_first_byte_of_oid(oid);
+                if partial_oid.matches(oid) {
+                    cb(oid);
+                }
+                // if the oid first byte that we just found in the file
+                // is greater than the first byte of our
+                // partial oid, this means we can stop reading
+                // because the .idx file is sorted by oid.
+                found_oid_first_byte > partial_oid_first_byte
+            });
             None
         })?;
         Ok(())
@@ -523,34 +537,46 @@ impl<'a> LightObjectDB<'a> {
         fs_helpers::search_folder(&search_path_str, |entry| -> Option<()> {
             if stop_searching { return None; }
             let filename = entry.file_name();
-            if let Some(s) = filename.to_str() {
-                if s.ends_with(".idx") {
-                    if let Ok(idx_file) = self.read_idx_file(s) {
-                        idx_file.walk_all_oids_with_index_and_from(Some(partial_oid_first_byte), |oid, oid_index| {
-                            let found_oid_first_byte = get_first_byte_of_oid(oid);
-                            if partial_oid.matches(oid) {
-                                if let Some(i) = idx_file.find_packfile_index_from_fanout_index(oid_index) {
-                                    let object_starts_at = i;
-                                    let location = FoundPackedLocation {
-                                        id: idx_file.id,
-                                        object_starts_at,
-                                        oid_index,
-                                    };
-                                    stop_searching = cb(oid, FoundObjectLocation::FoundPacked(location));
-                                    if stop_searching { return true; }
-                                } else {
-                                    last_error = ioerre!("Found an oid {:032x} but failed to find its packfile index", oid);
-                                };
-                            }
-                            // if the oid first byte that we just found in the file
-                            // is greater than the first byte of our
-                            // partial oid, this means we can stop reading
-                            // because the .idx file is sorted by oid.
-                            found_oid_first_byte > partial_oid_first_byte
-                        });
-                    }
-                }
+            let filename = match filename.to_str() {
+                Some(s) => s,
+                None => return None,
+            };
+            if ! filename.ends_with(".idx") {
+                return None;
             }
+            let idx_file = match self.read_idx_file(filename) {
+                Ok(f) => f,
+                // TODO: should we stop all iteration
+                // if a single idx file failed to read?
+                // I think not? so here I just return None
+                // and continue the iteration at the next idx filename
+                Err(_) => { return None },
+            };
+            idx_file.walk_all_oids_with_index_and_from(Some(partial_oid_first_byte), |oid, oid_index| {
+                let found_oid_first_byte = get_first_byte_of_oid(oid);
+                if partial_oid.matches(oid) {
+                    if let Some(i) = idx_file.find_packfile_index_from_fanout_index(oid_index) {
+                        let object_starts_at = i;
+                        let location = FoundPackedLocation {
+                            id: idx_file.id,
+                            object_starts_at,
+                            oid_index,
+                        };
+                        stop_searching = cb(oid, FoundObjectLocation::FoundPacked(location));
+                        if stop_searching { return true; }
+                    } else {
+                        last_error = ioerre!("Found an oid {:032x} but failed to find its packfile index", oid);
+                    };
+                }
+                // if the oid first byte that we just found in the file
+                // is greater than the first byte of our
+                // partial oid, this means we can stop reading
+                // because the .idx file is sorted by oid.
+                found_oid_first_byte > partial_oid_first_byte
+            });
+
+            // we return None to the fs_helpers callback
+            // so that it doesnt allocate any memory.
             None
         })?;
         Ok(())
