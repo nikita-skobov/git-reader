@@ -235,6 +235,40 @@ impl PartialSearchResult {
     }
 }
 
+/// A trait used to see if 2 Oids match.
+/// if both of the Oids are actually Oids then
+/// its a simple equality check, but for PartialOid =?= Oid
+/// check, then we need to check by shifting the Oid and then comparing.
+pub trait DoesMatch: Copy {
+    /// simple method to check if one Oid/PartialOid matches another.
+    fn matches(&self, other: Oid) -> bool;
+    /// Some operations require reading the first byte of an Oid.
+    /// Regardless if this is an actual Oid, or a PartialOid, we should
+    /// be able to get the first byte safely
+    fn get_first_byte(&self) -> u8;
+}
+
+impl DoesMatch for Oid {
+    #[inline(always)]
+    fn matches(&self, other: Oid) -> bool {
+        *self == other
+    }
+    #[inline(always)]
+    fn get_first_byte(&self) -> u8 {
+        get_first_byte_of_oid(*self)
+    }
+}
+
+impl DoesMatch for PartialOid {
+    #[inline(always)]
+    fn matches(&self, other: Oid) -> bool {
+        PartialOid::matches(self, other)
+    }
+    #[inline(always)]
+    fn get_first_byte(&self) -> u8 {
+        get_first_byte_of_oid(self.oid)
+    }
+}
 
 pub const MAX_PATH_TO_DB_LEN: usize = 4096;
 
@@ -367,14 +401,15 @@ impl<'a> LightObjectDB<'a> {
 
     /// like `find_matching_oids_loose` but in this callback,
     /// the full PathBuf to the matching oid object is also returned.
-    pub fn find_matching_oids_loose_with_locations<F>(
+    pub fn find_matching_oids_loose_with_locations<F, M>(
         &self,
-        partial_oid: PartialOid,
+        partial_oid: M,
         cb: &mut F,
     ) -> io::Result<()>
-        where F: FnMut(Oid, FoundObjectLocation)
+        where F: FnMut(Oid, FoundObjectLocation),
+              M: DoesMatch
     {
-        let first_byte = get_first_byte_of_oid(partial_oid.oid) as usize;
+        let first_byte = partial_oid.get_first_byte() as usize;
         let hex_first_byte: [u8; 2] = HEX_BYTES[first_byte];
         let (big_str_array, take_index) = self.get_static_path_str(&hex_first_byte);
         let search_path_str = std::str::from_utf8(&big_str_array[0..take_index])
@@ -462,16 +497,17 @@ impl<'a> LightObjectDB<'a> {
         Ok(())
     }
 
-    pub fn find_matching_oids_packed_with_locations<F>(
+    pub fn find_matching_oids_packed_with_locations<F, M>(
         &self,
-        partial_oid: PartialOid,
+        partial_oid: M,
         cb: &mut F,
     ) -> io::Result<()>
-        where F: FnMut(Oid, FoundObjectLocation)
+        where F: FnMut(Oid, FoundObjectLocation),
+              M: DoesMatch
     {
         // first we load every .idx file we find in the database/packs
         // directory
-        let partial_oid_first_byte = get_first_byte_of_oid(partial_oid.oid);
+        let partial_oid_first_byte = partial_oid.get_first_byte();
         let packs_dir = b"pack";
         let (big_str_array, take_index) = self.get_static_path_str(packs_dir);
         let search_path_str = std::str::from_utf8(&big_str_array[0..take_index])
@@ -526,12 +562,13 @@ impl<'a> LightObjectDB<'a> {
         Ok(())
     }
 
-    pub fn find_matching_oids_with_locations<F>(
+    pub fn find_matching_oids_with_locations<F, M>(
         &self,
-        partial_oid: PartialOid,
+        partial_oid: M,
         cb: F,
     ) -> io::Result<()>
-        where F: FnMut(Oid, FoundObjectLocation)
+        where F: FnMut(Oid, FoundObjectLocation),
+              M: DoesMatch,
     {
         let mut cb = cb;
         self.find_matching_oids_loose_with_locations(partial_oid, &mut cb)?;
