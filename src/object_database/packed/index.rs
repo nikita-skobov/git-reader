@@ -460,6 +460,42 @@ pub struct IDXFileLight {
 }
 
 impl IDXFileLight {
+    /// For V2 idx files, the oid starts at every index, and has an offset of 20 bytes.
+    /// ie: there is no padding or anything. you just read 20 bytes at a time, and each
+    /// 20 bytes is an Oid. the V2 idx file looks like:
+    /// [4 byte magic number]
+    /// [4 byte version number]
+    /// [256 entries * 4 bytes each] // fanout table
+    /// [oid_00] // 20 bytes
+    /// [oid_01] // 20 bytes
+    /// ... // until the last oid, which
+    /// we know how many oids there are from the last value
+    /// of the fanout table. ie: `num_oids = fanout_table.last();`
+    /// The purpose of this function is to take an index of an oid you want,
+    /// ie: I want the 3rd Oid in this file, and return the actual index
+    /// where that Oid starts at. Which for v2 idx files, its just
+    /// V2_HEADER_SIZE + (fanout_index * 20_bytes_is_size_of_each_oid)
+    #[inline(always)]
+    pub fn get_oid_starting_index_from_fanout_index_v2(&self, fanout_index: usize) -> usize {
+        V2_HEADER_SIZE + (fanout_index * SHA1_SIZE)
+    }
+
+    /// Similarly to the `get_oid_starting_index_from_fanout_index_v2` function,
+    /// this accomplishes the same goal (find the starting index of an oid, given
+    /// the N-index of which Oid you are looking for, ie: I want the 3rd Oid...).
+    /// However, unlike the v2 function, the calculation here is different because
+    /// V1 idx files store this information differently. A V1 idx file looks like:
+    /// [256 entries * 4 bytes each] // fanout table
+    /// [4 byte offset of where this oid exists in the packfile][oid_00] // 4 + 20 bytes
+    /// [4 byte offset of where this oid exists in the packfile][oid_01] // 4 + 20 bytes
+    /// ... // until the last oid...
+    /// so the calculation here is:
+    /// V1_header_size + 4 + (fanout_index * 24)
+    #[inline(always)]
+    pub fn get_oid_starting_index_from_fanout_index_v1(&self, fanout_index: usize) -> usize {
+        V1_HEADER_SIZE + FANOUT_ENTRY_SIZE + (fanout_index * (FANOUT_ENTRY_SIZE + SHA1_SIZE))
+    }
+
     /// pass a callback that takes an oid that we found,
     /// and returns true if you want to stop searching.
     /// if start_byte is some byte, we look for it in the fanout table
@@ -468,37 +504,34 @@ impl IDXFileLight {
     /// all oids, or efficiently searching for a specific one.
     pub fn walk_all_oids_from(&self, start_byte: Option<u8>, cb: impl FnMut(Oid) -> bool) {
         let mut cb = cb;
-        let (start_index, seek_up) = match self.version {
-            // if we are a v2 idx file, then we just need to
-            // go past the header/fanout table, and
-            // then iterate 20 bytes at a time, each 20 bytes
-            // is a full oid of an object that is in this idx file.
-            IDXVersion::V2 => {
-                let start_index = V2_HEADER_SIZE;
-                (start_index, None)
+        let start_fanout_index = match start_byte {
+            Some(first_byte) => {
+                let first_byte = first_byte as usize;
+                if first_byte > 0 {
+                    self.fanout_table[first_byte - 1]
+                } else {
+                    0
+                }    
             }
-            IDXVersion::V1 => {
-                // theres 4 bytes of offset in each entry in v1 idx files.
-                // so we skip the 4 bytes, get the next 20 bytes as the sha,
-                // and then go ahead another 24 bytes to get the next one.
-                let start_index = V1_HEADER_SIZE + FANOUT_ENTRY_SIZE;
-                (start_index, Some(FANOUT_ENTRY_SIZE))
-            }
+            None => 0,
         };
 
-        let mut start_index = if let Some(first_byte) = start_byte {
-            let first_byte = first_byte as usize;
-            let start_search = if first_byte > 0 {
-                self.fanout_table[first_byte - 1]
-            } else {
-                0
-            } as usize;
-            match self.version {
-                IDXVersion::V2 => V2_HEADER_SIZE + start_search * SHA1_SIZE,
-                IDXVersion::V1 => V1_HEADER_SIZE + start_search * (FANOUT_ENTRY_SIZE + SHA1_SIZE) + FANOUT_ENTRY_SIZE,
+        let start_fanout_index = start_fanout_index as usize;
+        // now we know which Nth oid we want, so now find the index of this oid,
+        // as well as establish how many bytes we need to skip each time we advance to
+        // the (N + 1)th oid.
+        let (mut start_index, seek_up) = match self.version {
+            IDXVersion::V1 => {
+                let start_i = self.get_oid_starting_index_from_fanout_index_v1(start_fanout_index);
+                // v1 requires a seekup of 4 bytes + 20 bytes for the oid
+                (start_i, FANOUT_ENTRY_SIZE + SHA1_SIZE)
             }
-        } else {
-            start_index
+            IDXVersion::V2 => {
+                let start_i = self.get_oid_starting_index_from_fanout_index_v2(start_fanout_index);
+                // v2 doesnt require up other than the oid size. if we read 20 bytes
+                // the next oid is at the next 20 bytes immediately after
+                (start_i, 0 + SHA1_SIZE)
+            }
         };
 
         for _ in 0..self.num_objects {
@@ -510,11 +543,7 @@ impl IDXFileLight {
 
             // if V1, we have to seek ahead 4 bytes to skip
             // the offsets, but in V2, we just read the next SHA
-            if let Some(skip_ahead) = seek_up {
-                start_index += SHA1_SIZE + skip_ahead;
-            } else {
-                start_index += SHA1_SIZE;
-            }
+            start_index += seek_up;
         }
     }
 }
