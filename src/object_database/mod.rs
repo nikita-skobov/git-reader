@@ -1,5 +1,5 @@
 use std::{path::{PathBuf, Path}, io, fs};
-use crate::{ioerre, object_id::{oid_full_to_string, Oid, PartialOid, hex_u128_to_str, full_oid_to_u128_oid, get_first_byte_of_oid, HEX_BYTES, hash_object_file_and_folder}, ioerr, fs_helpers};
+use crate::{ioerre, object_id::{oid_full_to_string, Oid, PartialOid, hex_u128_to_str, full_oid_to_u128_oid, get_first_byte_of_oid, HEX_BYTES, hash_object_file_and_folder, OidFull}, ioerr, fs_helpers};
 
 pub mod loose;
 use loose::*;
@@ -266,6 +266,34 @@ pub struct LightObjectDB<'a> {
     pub path_to_db_bytes_start: usize,
 }
 
+/// a struct describing the information necessary
+/// to read a packed object that was found in some index file.
+#[derive(Debug, Copy, Clone)]
+pub struct FoundPackedLocation {
+    /// The full sha1 of the index file/pack file.
+    /// ie: this is the Oid of "pack-{OidFull}.idx" or "pack-{OidFull}.pack"
+    /// Note: this OidFull is the actual bytes of the sha1 hash. If you
+    /// wish to read it as hex, you will need to convert it to a hex string.
+    pub id: OidFull,
+    /// The index within the packfile of where this object starts at.
+    pub object_starts_at: u64,
+    /// Which Nth index this oid is in the index file.
+    /// eg: If we found the Oid as the 3rd Oid in the index file,
+    /// this value is 3. This is useful if you wish to read
+    /// the .idx file again, so you can jump right to this found oid.
+    pub oid_index: usize,
+}
+
+/// An enum of where we could have possibly found an object.
+#[derive(Debug, Clone)]
+pub enum FoundObjectLocation {
+    /// a simple path to where this loose object resides
+    FoundLoose(PathBuf),
+    /// a struct containing information necessary to read/locate
+    /// this object in the pack file.
+    FoundPacked(FoundPackedLocation),
+}
+
 impl<'a> LightObjectDB<'a> {
     pub fn new(p: &'a str) -> io::Result<LightObjectDB<'a>> {
         // hard to imagine a path would be longer than this right?...
@@ -337,6 +365,45 @@ impl<'a> LightObjectDB<'a> {
         Ok(())
     }
 
+    /// like `find_matching_oids_loose` but in this callback,
+    /// the full PathBuf to the matching oid object is also returned.
+    pub fn find_matching_oids_loose_with_locations<F>(
+        &self,
+        partial_oid: PartialOid,
+        cb: &mut F,
+    ) -> io::Result<()>
+        where F: FnMut(Oid, FoundObjectLocation)
+    {
+        let first_byte = get_first_byte_of_oid(partial_oid.oid) as usize;
+        let hex_first_byte: [u8; 2] = HEX_BYTES[first_byte];
+        let (big_str_array, take_index) = self.get_static_path_str(&hex_first_byte);
+        let search_path_str = std::str::from_utf8(&big_str_array[0..take_index])
+            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
+        
+        // we know all of these HEX_BYTES are valid utf-8 sequences
+        // so we can unwrap:
+        let hex_str = std::str::from_utf8(&hex_first_byte).unwrap();
+        let _ = fs_helpers::search_folder(&search_path_str, |entry| -> Option<()> {
+            let entryname = entry.file_name();
+            if let Some(s) = entryname.to_str() {
+                if let Ok(oid) = hash_object_file_and_folder(hex_str, &s) {
+                    if partial_oid.matches(oid) {
+                        // if we found a match, lets construct
+                        // a pathbuf from our current search folder,
+                        // and the filename of what we found:
+                        let mut full_pathbuf = PathBuf::from(search_path_str);
+                        full_pathbuf.push(s);
+                        cb(oid, FoundObjectLocation::FoundLoose(full_pathbuf));
+                    }
+                }
+            }
+            // TODO: otherwise if we failed to get str, should
+            // we treat that as an error?
+            None
+        });
+        Ok(())
+    }
+
     pub fn read_idx_file(
         &self,
         idx_file_name: &str,
@@ -395,6 +462,56 @@ impl<'a> LightObjectDB<'a> {
         Ok(())
     }
 
+    pub fn find_matching_oids_packed_with_locations<F>(
+        &self,
+        partial_oid: PartialOid,
+        cb: &mut F,
+    ) -> io::Result<()>
+        where F: FnMut(Oid, FoundObjectLocation)
+    {
+        // first we load every .idx file we find in the database/packs
+        // directory
+        let partial_oid_first_byte = get_first_byte_of_oid(partial_oid.oid);
+        let packs_dir = b"pack";
+        let (big_str_array, take_index) = self.get_static_path_str(packs_dir);
+        let search_path_str = std::str::from_utf8(&big_str_array[0..take_index])
+            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
+        // println!("Searching {}", search_path_str);
+        let mut last_error = Ok(());
+        fs_helpers::search_folder(&search_path_str, |entry| -> Option<()> {
+            let filename = entry.file_name();
+            if let Some(s) = filename.to_str() {
+                if s.ends_with(".idx") {
+                    if let Ok(mut idx_file) = self.read_idx_file(s) {
+                        idx_file.walk_all_oids_with_index_and_from(Some(partial_oid_first_byte), |oid, oid_index| {
+                            let found_oid_first_byte = get_first_byte_of_oid(oid);
+                            if partial_oid.matches(oid) {
+                                if let Some(i) = idx_file.find_packfile_index_from_fanout_index(oid_index) {
+                                    let object_starts_at = i;
+                                    let location = FoundPackedLocation {
+                                        id: idx_file.id,
+                                        object_starts_at,
+                                        oid_index,
+                                    };
+                                    cb(oid, FoundObjectLocation::FoundPacked(location));
+                                } else {
+                                    last_error = ioerre!("Found an oid {:032x} but failed to find its packfile index", oid);
+                                };
+                            }
+                            // if the oid first byte that we just found in the file
+                            // is greater than the first byte of our
+                            // partial oid, this means we can stop reading
+                            // because the .idx file is sorted by oid.
+                            found_oid_first_byte > partial_oid_first_byte
+                        });
+                    }
+                }
+            }
+            None
+        })?;
+        Ok(())
+    }
+
     pub fn find_matching_oids<F>(
         &self,
         partial_oid: PartialOid,
@@ -406,6 +523,19 @@ impl<'a> LightObjectDB<'a> {
         self.find_matching_oids_loose(partial_oid, &mut cb)?;
         self.find_matching_oids_packed(partial_oid, &mut cb)?;
 
+        Ok(())
+    }
+
+    pub fn find_matching_oids_with_locations<F>(
+        &self,
+        partial_oid: PartialOid,
+        cb: F,
+    ) -> io::Result<()>
+        where F: FnMut(Oid, FoundObjectLocation)
+    {
+        let mut cb = cb;
+        self.find_matching_oids_loose_with_locations(partial_oid, &mut cb)?;
+        self.find_matching_oids_packed_with_locations(partial_oid, &mut cb)?;
         Ok(())
     }
 }
