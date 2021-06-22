@@ -1,8 +1,8 @@
 
-use std::{fmt::Display, path::PathBuf};
+use std::{fmt::Display, path::PathBuf, convert::TryFrom, io};
 use commit_object_parsing::ParseCommit;
 use super::{read_raw_object, Resolve};
-use super::UnparsedObjectType;
+use super::{UnparsedObject, UnparsedObjectType};
 use crate::ioerre;
 
 pub mod commit_object_parsing;
@@ -39,6 +39,30 @@ impl<T: ParseCommit> Display for ParsedObject<T> {
             ParsedObject::Blob(_) => write!(f, "blobs not impl yet"),
             ParsedObject::Tag(_) => write!(f, "tags not impl yet"),
         }
+    }
+}
+
+impl<T: ParseCommit> TryFrom<UnparsedObject> for ParsedObject<T> {
+    type Error = io::Error;
+
+    fn try_from(unparsed: UnparsedObject) -> Result<Self, Self::Error> {
+        let obj = match unparsed.object_type {
+            UnparsedObjectType::Tree => {
+                let tree_obj = TreeObject::parse(&unparsed.payload)?;
+                ParsedObject::Tree(tree_obj)
+            }
+            UnparsedObjectType::Commit => {
+                let commit_obj = T::parse(&unparsed.payload)?;
+                ParsedObject::Commit(commit_obj)
+            }
+            UnparsedObjectType::Blob => {
+                ParsedObject::Blob(BlobObject {})
+            }
+            UnparsedObjectType::Tag => {
+                ParsedObject::Tag(TagObject {})
+            }
+        };
+        Ok(obj)
     }
 }
 
