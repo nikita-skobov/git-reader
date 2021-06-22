@@ -496,6 +496,17 @@ impl IDXFileLight {
         V1_HEADER_SIZE + FANOUT_ENTRY_SIZE + (fanout_index * (FANOUT_ENTRY_SIZE + SHA1_SIZE))
     }
 
+    pub fn get_oid_starting_index_from_fanout_index(&self, fanout_index: usize) -> usize {
+        match self.version {
+            IDXVersion::V1 => {
+                self.get_oid_starting_index_from_fanout_index_v1(fanout_index)
+            }
+            IDXVersion::V2 => {
+                self.get_oid_starting_index_from_fanout_index_v2(fanout_index)
+            }
+        }
+    }
+
     /// given a fanout_index, (ie: I want the 3rd Oid => fanout_index = 3),
     /// find the offset of where that object begins in the associated packfile.
     /// for V1 .idx files, this is simply the 4 bytes that come directly before
@@ -504,13 +515,13 @@ impl IDXFileLight {
     /// [4 byte packfile offset][oid_03] // 4 + 20 bytes.
     /// so here we want to read these first 4 bytes in network order.
     #[inline(always)]
-    pub fn find_packfile_index_from_fanout_index_v1(&self, fanout_index: usize) -> Option<usize> {
+    pub fn find_packfile_index_from_fanout_index_v1(&self, fanout_index: usize) -> Option<u64> {
         let oid_start = self.get_oid_starting_index_from_fanout_index_v1(fanout_index);
         // we subtract 4 because we dont want the oid index, but the 4 bytes before the oid:
         let offset_start = oid_start - FANOUT_ENTRY_SIZE;
         let desired_range = offset_start..oid_start;
         let desired_bytes = &self.file.get(desired_range)?;
-        Some(BigEndian::read_u32(desired_bytes) as usize)
+        Some(BigEndian::read_u32(desired_bytes) as u64)
     }
 
     /// given a fanout_index, (ie: I want the 4th Oid => fanout_index = 4),
@@ -546,13 +557,70 @@ impl IDXFileLight {
         Some(BigEndian::read_u64(desired_bytes))
     }
 
-    /// pass a callback that takes an oid that we found,
-    /// and returns true if you want to stop searching.
-    /// if start_byte is some byte, we look for it in the fanout table
-    /// and start our search there. Otherwise, if start_byte is None,
-    /// we traverse all oids. This function can be used for both collecting
-    /// all oids, or efficiently searching for a specific one.
-    pub fn walk_all_oids_from(&self, start_byte: Option<u8>, cb: impl FnMut(Oid) -> bool) {
+    pub fn find_packfile_index_from_fanout_index(&self, fanout_index: usize) -> Option<u64> {
+        match self.version {
+            IDXVersion::V1 => {
+                self.find_packfile_index_from_fanout_index_v1(fanout_index)
+            }
+            IDXVersion::V2 => {
+                self.find_packfile_index_from_fanout_index_v2(fanout_index)
+            }
+        }
+    }
+
+    pub fn get_packfile_index_of_oid(&self, oid: Oid) -> io::Result<Option<usize>> {
+        let idx_index = self.find_index_for(oid)?;
+        let idx_index = match idx_index {
+            Some(i) => i,
+            None => return Ok(None),
+        };
+        // the idx_index is the index within the .idx file
+        // where we will find the index of the packfile object:
+        let pack_index = match self.find_packfile_index_from_fanout_index(idx_index) {
+            Some(i) => i,
+            None => return Ok(None),
+        };
+        let pack_index: usize = pack_index.try_into()
+            .map_err(|_| ioerr!("Failed to convert a .idx index offset to a valid packfile index"))?;
+
+        Ok(Some(pack_index))
+    }
+
+    pub fn find_index_for(&self, oid: Oid) -> io::Result<Option<usize>> {
+        let first_byte = get_first_byte_of_oid(oid) as usize;
+        let mut start_search = if first_byte > 0 {
+            self.fanout_table[first_byte - 1]
+        } else {
+            0
+        } as usize;
+        let mut end_search = self.fanout_table[first_byte] as usize;
+
+        while start_search < end_search {
+            let mid = (start_search + end_search) / 2;
+            let mid_index = self.get_oid_starting_index_from_fanout_index(mid);
+            let mid_id = &self.file[mid_index..(mid_index + SHA1_SIZE)];
+            let mid_id = full_slice_oid_to_u128_oid(&mid_id);
+            if oid < mid_id {
+                end_search = mid;
+            } else if oid > mid_id {
+                start_search = mid + 1;
+            } else {
+                return Ok(Some(mid))
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Like `walk_all_oids_from`, but also passes
+    /// the current fanout index of this oid. This fanout index
+    /// can be passed to find_packfile_index_from_fanout_index() in order
+    /// to find the packfile index where this object resides.
+    pub fn walk_all_oids_with_index_and_from(
+        &self,
+        start_byte: Option<u8>,
+        cb: impl FnMut(Oid, usize) -> bool
+    ) {
         let mut cb = cb;
         let start_fanout_index = match start_byte {
             Some(first_byte) => {
@@ -584,17 +652,36 @@ impl IDXFileLight {
             }
         };
 
+        let mut current_fanout_index = start_fanout_index;
         for _ in 0..self.num_objects {
             // we always read SHA1_SIZE:
             let sha_bytes = &self.file[start_index..(start_index + SHA1_SIZE)];
             let oid = full_slice_oid_to_u128_oid(&sha_bytes);
-            let should_stop_iterating = cb(oid);
+            let should_stop_iterating = cb(oid, current_fanout_index);
             if should_stop_iterating { break; }
 
             // if V1, we have to seek ahead 4 bytes to skip
             // the offsets, but in V2, we just read the next SHA
             start_index += seek_up;
+            current_fanout_index += 1;
         }
+    }
+
+    /// pass a callback that takes an oid that we found,
+    /// and returns true if you want to stop searching.
+    /// if start_byte is some byte, we look for it in the fanout table
+    /// and start our search there. Otherwise, if start_byte is None,
+    /// we traverse all oids. This function can be used for both collecting
+    /// all oids, or efficiently searching for a specific one.
+    pub fn walk_all_oids_from(
+        &self,
+        start_byte: Option<u8>,
+        cb: impl FnMut(Oid) -> bool
+    ) {
+        let mut cb = cb;
+        self.walk_all_oids_with_index_and_from(start_byte, |oid, _| {
+            cb(oid)
+        })
     }
 }
 
