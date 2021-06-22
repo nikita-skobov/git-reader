@@ -385,7 +385,7 @@ impl IDXFile {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialOrd, PartialEq)]
 pub enum IDXVersion {
     V1,
     V2,
@@ -565,6 +565,31 @@ impl IDXFileLight {
             IDXVersion::V2 => {
                 self.find_packfile_index_from_fanout_index_v2(fanout_index)
             }
+        }
+    }
+
+    /// gets the CRC32 value from the CRC32 table of the corresponding fanout entry.
+    /// NOTE: the CRC32 table only exists in V2 format. SO this unchecked
+    /// function does not check if we are in V2, and thus you can be getting bogus
+    /// CRC32 values... If you want to use a function that will check
+    /// for V2, then use: `get_crc32_from_fanout_index`
+    pub fn get_crc32_from_fanout_index_unchecked(&self, fanout_index: usize) -> Option<u32> {
+        let oid_table_starts_at = V2_HEADER_SIZE;
+        let crc_table_starts_at = oid_table_starts_at + (self.num_objects * SHA1_SIZE);
+        let this_entry_starts = crc_table_starts_at + (fanout_index * FANOUT_ENTRY_SIZE);
+        let desired_range = this_entry_starts..(this_entry_starts + FANOUT_ENTRY_SIZE);
+        let desired_bytes = self.file.get(desired_range)?;
+        let crc_value = BigEndian::read_u32(&desired_bytes);
+        Some(crc_value)
+    }
+
+    /// Returns None if not on V2 idx, otherwise
+    /// calls `get_crc32_from_fanout_index_unchecked`
+    pub fn get_crc32_from_fanout_index(&self, fanout_index: usize) -> Option<u32> {
+        if let IDXVersion::V2 = self.version {
+            self.get_crc32_from_fanout_index_unchecked(fanout_index)
+        } else {
+            None
         }
     }
 
