@@ -686,8 +686,11 @@ pub fn open_idx_file_light<P: AsRef<Path>>(
         if version_number != V2_IDX_VERSION_NUMBER {
             return ioerre!("Invalid .idx version number. Expected version number of {}, found {}", V2_IDX_VERSION_NUMBER, version_number);
         }
+        let fanout_starts = V2_IDX_SIGNATURE_LEN + V2_SKIP_VERSION_NUMBER_SIZE;
+        let fanout_len = FANOUT_ENTRY_SIZE * FANOUT_LENGTH;
+        let fanout_range = fanout_starts..(fanout_starts + fanout_len);
         let mut fanout_table = [0; FANOUT_LENGTH];
-        fill_fan(&mut fanout_table, &read_bytes);
+        fill_fan(&mut fanout_table, &read_bytes[fanout_range]);
         let num_objects = fanout_table[FANOUT_LENGTH - 1] as usize;
         (IDXVersion::V2, num_objects, fanout_table)
     } else {
