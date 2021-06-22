@@ -401,12 +401,13 @@ impl<'a> LightObjectDB<'a> {
 
     /// like `find_matching_oids_loose` but in this callback,
     /// the full PathBuf to the matching oid object is also returned.
+    /// The callback should return true if you want to stop searching
     pub fn find_matching_oids_loose_with_locations<F, M>(
         &self,
         partial_oid: M,
         cb: &mut F,
     ) -> io::Result<()>
-        where F: FnMut(Oid, FoundObjectLocation),
+        where F: FnMut(Oid, FoundObjectLocation) -> bool,
               M: DoesMatch
     {
         let first_byte = partial_oid.get_first_byte() as usize;
@@ -418,7 +419,9 @@ impl<'a> LightObjectDB<'a> {
         // we know all of these HEX_BYTES are valid utf-8 sequences
         // so we can unwrap:
         let hex_str = std::str::from_utf8(&hex_first_byte).unwrap();
+        let mut stop_searching = false;
         let _ = fs_helpers::search_folder(&search_path_str, |entry| -> Option<()> {
+            if stop_searching { return None; }
             let entryname = entry.file_name();
             if let Some(s) = entryname.to_str() {
                 if let Ok(oid) = hash_object_file_and_folder(hex_str, &s) {
@@ -428,7 +431,7 @@ impl<'a> LightObjectDB<'a> {
                         // and the filename of what we found:
                         let mut full_pathbuf = PathBuf::from(search_path_str);
                         full_pathbuf.push(s);
-                        cb(oid, FoundObjectLocation::FoundLoose(full_pathbuf));
+                        stop_searching = cb(oid, FoundObjectLocation::FoundLoose(full_pathbuf));
                     }
                 }
             }
@@ -497,12 +500,14 @@ impl<'a> LightObjectDB<'a> {
         Ok(())
     }
 
+    /// The callback should return true if you want to stop
+    /// searching.
     pub fn find_matching_oids_packed_with_locations<F, M>(
         &self,
         partial_oid: M,
         cb: &mut F,
     ) -> io::Result<()>
-        where F: FnMut(Oid, FoundObjectLocation),
+        where F: FnMut(Oid, FoundObjectLocation) -> bool,
               M: DoesMatch
     {
         // first we load every .idx file we find in the database/packs
@@ -514,7 +519,9 @@ impl<'a> LightObjectDB<'a> {
             .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
         // println!("Searching {}", search_path_str);
         let mut last_error = Ok(());
+        let mut stop_searching = false;
         fs_helpers::search_folder(&search_path_str, |entry| -> Option<()> {
+            if stop_searching { return None; }
             let filename = entry.file_name();
             if let Some(s) = filename.to_str() {
                 if s.ends_with(".idx") {
@@ -529,7 +536,8 @@ impl<'a> LightObjectDB<'a> {
                                         object_starts_at,
                                         oid_index,
                                     };
-                                    cb(oid, FoundObjectLocation::FoundPacked(location));
+                                    stop_searching = cb(oid, FoundObjectLocation::FoundPacked(location));
+                                    if stop_searching { return true; }
                                 } else {
                                     last_error = ioerre!("Found an oid {:032x} but failed to find its packfile index", oid);
                                 };
@@ -571,8 +579,43 @@ impl<'a> LightObjectDB<'a> {
               M: DoesMatch,
     {
         let mut cb = cb;
-        self.find_matching_oids_loose_with_locations(partial_oid, &mut cb)?;
-        self.find_matching_oids_packed_with_locations(partial_oid, &mut cb)?;
+        let mut cb_wrapper = |oid, location| {
+            cb(oid, location);
+            false
+        };
+        self.find_matching_oids_loose_with_locations(partial_oid, &mut cb_wrapper)?;
+        self.find_matching_oids_packed_with_locations(partial_oid, &mut cb_wrapper)?;
         Ok(())
+    }
+
+    pub fn find_first_matching_oid_with_location<M>(
+        &self,
+        partial_oid: M,
+    ) -> io::Result<(Oid, FoundObjectLocation)>
+        where M: DoesMatch
+    {
+        let mut found: Option<(Oid, FoundObjectLocation)> = None;
+        let mut cb_wrapper = |oid, location| {
+            found = Some((oid, location));
+            true
+        };
+        self.find_matching_oids_loose_with_locations(partial_oid, &mut cb_wrapper)?;
+        if let Some(f) = found {
+            return Ok(f);
+        }
+        let mut found: Option<(Oid, FoundObjectLocation)> = None;
+        let mut cb_wrapper = |oid, location| {
+            found = Some((oid, location));
+            true
+        };
+        self.find_matching_oids_packed_with_locations(partial_oid, &mut cb_wrapper)?;
+        match found {
+            Some(f) => Ok(f),
+            None => {
+                // TODO: should add debug requirement for M so we can print which
+                // one we failed to find...
+                return ioerre!("Failed to find a matching oid/location");
+            }
+        }
     }
 }
