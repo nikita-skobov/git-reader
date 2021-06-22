@@ -479,7 +479,7 @@ impl<'a> LightObjectDB<'a> {
             let filename = entry.file_name();
             if let Some(s) = filename.to_str() {
                 if s.ends_with(".idx") {
-                    if let Ok(mut idx_file) = self.read_idx_file(s) {
+                    if let Ok(idx_file) = self.read_idx_file(s) {
                         idx_file.walk_all_oids_from(Some(partial_oid_first_byte), |oid| {
                             let found_oid_first_byte = get_first_byte_of_oid(oid);
                             if partial_oid.matches(oid) {
@@ -525,7 +525,7 @@ impl<'a> LightObjectDB<'a> {
             let filename = entry.file_name();
             if let Some(s) = filename.to_str() {
                 if s.ends_with(".idx") {
-                    if let Ok(mut idx_file) = self.read_idx_file(s) {
+                    if let Ok(idx_file) = self.read_idx_file(s) {
                         idx_file.walk_all_oids_with_index_and_from(Some(partial_oid_first_byte), |oid, oid_index| {
                             let found_oid_first_byte = get_first_byte_of_oid(oid);
                             if partial_oid.matches(oid) {
