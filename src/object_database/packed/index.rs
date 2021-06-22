@@ -455,7 +455,7 @@ pub struct IDXFileLight {
     // TODO: add this:
     // pub id: OidFull,
     pub version: IDXVersion,
-    pub num_objects: u32,
+    pub num_objects: usize,
     pub file: Mmap,
 }
 
@@ -570,12 +570,12 @@ pub fn open_idx_file_light<P: AsRef<Path>>(
         }
         let mut fanout_table = [0; FANOUT_LENGTH];
         fill_fan(&mut fanout_table, &read_bytes);
-        let num_objects = fanout_table[FANOUT_LENGTH - 1];
+        let num_objects = fanout_table[FANOUT_LENGTH - 1] as usize;
         (IDXVersion::V2, num_objects, fanout_table)
     } else {
         let mut fanout_table = [0; FANOUT_LENGTH];
         fill_fan(&mut fanout_table, &read_bytes);
-        let num_objects = fanout_table[FANOUT_LENGTH - 1];
+        let num_objects = fanout_table[FANOUT_LENGTH - 1] as usize;
         (IDXVersion::V1, num_objects, fanout_table)
     };
 
