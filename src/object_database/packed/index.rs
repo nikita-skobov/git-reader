@@ -568,50 +568,6 @@ impl IDXFileLight {
         }
     }
 
-    pub fn get_packfile_index_of_oid(&self, oid: Oid) -> io::Result<Option<usize>> {
-        let idx_index = self.find_index_for(oid)?;
-        let idx_index = match idx_index {
-            Some(i) => i,
-            None => return Ok(None),
-        };
-        // the idx_index is the index within the .idx file
-        // where we will find the index of the packfile object:
-        let pack_index = match self.find_packfile_index_from_fanout_index(idx_index) {
-            Some(i) => i,
-            None => return Ok(None),
-        };
-        let pack_index: usize = pack_index.try_into()
-            .map_err(|_| ioerr!("Failed to convert a .idx index offset to a valid packfile index"))?;
-
-        Ok(Some(pack_index))
-    }
-
-    pub fn find_index_for(&self, oid: Oid) -> io::Result<Option<usize>> {
-        let first_byte = get_first_byte_of_oid(oid) as usize;
-        let mut start_search = if first_byte > 0 {
-            self.fanout_table[first_byte - 1]
-        } else {
-            0
-        } as usize;
-        let mut end_search = self.fanout_table[first_byte] as usize;
-
-        while start_search < end_search {
-            let mid = (start_search + end_search) / 2;
-            let mid_index = self.get_oid_starting_index_from_fanout_index(mid);
-            let mid_id = &self.file[mid_index..(mid_index + SHA1_SIZE)];
-            let mid_id = full_slice_oid_to_u128_oid(&mid_id);
-            if oid < mid_id {
-                end_search = mid;
-            } else if oid > mid_id {
-                start_search = mid + 1;
-            } else {
-                return Ok(Some(mid))
-            }
-        }
-
-        Ok(None)
-    }
-
     /// Like `walk_all_oids_from`, but also passes
     /// the current fanout index of this oid. This fanout index
     /// can be passed to find_packfile_index_from_fanout_index() in order
