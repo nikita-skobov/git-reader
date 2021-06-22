@@ -521,7 +521,7 @@ impl IDXFileLight {
     /// which has 8 byte offsets.
     #[inline(always)]
     pub fn find_packfile_index_from_fanout_index_v2(&self, fanout_index: usize) -> Option<u64> {
-        let oid_table_starts_at = V2_HEADER_SIZE + (FANOUT_ENTRY_SIZE * FANOUT_LENGTH);
+        let oid_table_starts_at = V2_HEADER_SIZE;
         let crc_table_starts_at = oid_table_starts_at + (self.num_objects * SHA1_SIZE);
         let four_byte_offset_table_starts_at = crc_table_starts_at + (self.num_objects * FANOUT_ENTRY_SIZE);
 
