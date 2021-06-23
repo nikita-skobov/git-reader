@@ -108,6 +108,20 @@ pub fn oid_full_to_string(h: OidFull) -> String {
     s
 }
 
+/// returns an array of 40 bytes (hex characters)
+/// that represents the OidFull.
+pub fn oid_full_to_string_no_alloc(h: OidFull) -> [u8; 40] {
+    let mut out = [b'0'; 40];
+    let h_len = h.len();
+    for i in 0..h_len {
+        let h_byte = h[i];
+        let hex_bytes = HEX_BYTES[h_byte as usize];
+        let out_range = (i * 2)..(i * 2 + 2);
+        out[out_range].copy_from_slice(&hex_bytes);
+    }
+    out
+}
+
 pub fn oid_str_truncated_to_oid(oid_str: OidStrTruncated) -> io::Result<Oid> {
     let oid_str = std::str::from_utf8(&oid_str.0).map_err(|e| ioerr!("{}", e))?;
     let oid = Oid::from_str_radix(oid_str, 16).map_err(|e| ioerr!("{}", e))?;
