@@ -62,7 +62,11 @@ pub struct CommitFullOnlyMessage {
 /// Like `CommitFullOnlyMessage` but we don't parse the
 /// author or committer text
 pub struct CommitOnlyMessageNoAuthorOrCommitter {
-
+    pub tree: Oid,
+    pub parent_one: Oid,
+    pub parent_two: Oid,
+    pub extra_parents: Vec<Oid>,
+    pub message: String,
 }
 
 /// TODO: implement parsing
@@ -123,6 +127,26 @@ impl Display for CommitFullOnlyMessage {
     }
 }
 
+impl Display for CommitOnlyMessageNoAuthorOrCommitter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tree_id_str = hex_u128_to_str(self.tree);
+        let parent_str = if self.parent_one == 0 {
+            "".into()
+        } else {
+            format!("parent {}", hex_u128_to_str(self.parent_one))
+        };
+        let mut parent_str = if self.parent_two == 0 {
+            parent_str
+        } else {
+            format!("{}\nparent {}", parent_str, hex_u128_to_str(self.parent_two))
+        };
+        for parent in self.extra_parents.iter() {
+            parent_str = format!("{}\nparent {}", parent_str, hex_u128_to_str(*parent));
+        }
+        write!(f, "tree {}\n{}\n\n{}", tree_id_str, parent_str, self.message)
+    }
+}
+
 impl Display for CommitFullMessageAndDescription {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let tree_id_str = hex_u128_to_str(self.tree);
@@ -172,8 +196,8 @@ impl ParseCommit for CommitFull {
 
         // the hard part is done, now we can just parse the committer/author
         // and message
-        let author = parse_author(raw, current_index)?;
-        let committer = parse_committer(raw, current_index)?;
+        let author = parse_author(raw, current_index, true)?;
+        let committer = parse_committer(raw, current_index, true)?;
         let rest_of_data = &raw[*current_index..];
         // the rest of the data should be the commit message.
         // we dont want trailing newlines though, so we do this:
@@ -209,8 +233,8 @@ impl ParseCommit for CommitFullOnlyMessage {
 
         // the hard part is done, now we can just parse the committer/author
         // and message
-        let author = parse_author(raw, current_index)?;
-        let committer = parse_committer(raw, current_index)?;
+        let author = parse_author(raw, current_index, true)?;
+        let committer = parse_committer(raw, current_index, true)?;
         let rest_of_data = &raw[*current_index..];
         // for the only message mode, we wish to only allocate for the
         // first part of the commit message, so we read up to
@@ -231,6 +255,41 @@ impl ParseCommit for CommitFullOnlyMessage {
             extra_parents: only_tree_and_parents.extra_parents,
             author,
             committer,
+            message: message.into(),
+        };
+        Ok(obj)
+    }
+}
+
+impl ParseCommit for CommitOnlyMessageNoAuthorOrCommitter {
+    fn parse_inner(
+        raw: &[u8],
+        current_index: &mut usize
+    ) -> io::Result<Self> where Self: Sized {
+        let only_tree_and_parents = CommitOnlyTreeAndParents::parse_inner(raw, current_index)?;
+
+        // the hard part is done, now we can just parse the committer/author
+        // and message
+        let _ = parse_author(raw, current_index, false)?;
+        let _ = parse_committer(raw, current_index, false)?;
+        let rest_of_data = &raw[*current_index..];
+        // for the only message mode, we wish to only allocate for the
+        // first part of the commit message, so we read up to
+        // the first newline we find. if we don't find the newline, then
+        // we take everything:
+        let message = if let Some(newline_index) = rest_of_data.iter().position(|b| *b == b'\n') {
+            let commit_message_raw = &rest_of_data[0..newline_index];
+            String::from_utf8_lossy(commit_message_raw)
+        } else {
+            let commit_message_raw = &rest_of_data[0..];
+            String::from_utf8_lossy(commit_message_raw)
+        };
+
+        let obj = CommitOnlyMessageNoAuthorOrCommitter {
+            tree: only_tree_and_parents.tree,
+            parent_one: only_tree_and_parents.parent_one,
+            parent_two: only_tree_and_parents.parent_two,
+            extra_parents: only_tree_and_parents.extra_parents,
             message: message.into(),
         };
         Ok(obj)
@@ -318,7 +377,14 @@ impl ParseCommit for CommitOnlyTreeAndParents {
     }
 }
 
-pub fn parse_author(raw: &[u8], curr_index: &mut usize) -> io::Result<String> {
+/// If should allocate is false, we dont actually create a string.
+/// This is useful for when you want to only advance the `curr_index` but
+/// you don't care about the author string
+pub fn parse_author(
+    raw: &[u8],
+    curr_index: &mut usize,
+    should_allocate: bool,
+) -> io::Result<String> {
     let start_index = *curr_index;
     let desired_range = start_index..(start_index + 7);
     let line = raw.get(desired_range)
@@ -333,12 +399,23 @@ pub fn parse_author(raw: &[u8], curr_index: &mut usize) -> io::Result<String> {
         .ok_or_else(|| ioerr!("Failed to find newline when parsing author line"))?;
 
     let author_line = &rest_of_data[0..newline_index];
-    let author_str = String::from_utf8_lossy(author_line);
+    let author_str = if should_allocate {
+        String::from_utf8_lossy(author_line).into()
+    } else {
+        String::with_capacity(0)
+    };
     *curr_index = start_index + 7 + newline_index + 1;
-    Ok(author_str.into())
+    Ok(author_str)
 }
 
-pub fn parse_committer(raw: &[u8], curr_index: &mut usize) -> io::Result<String> {
+/// If should allocate is false, we dont actually create a string.
+/// This is useful for when you want to only advance the `curr_index` but
+/// you don't care about the author string
+pub fn parse_committer(
+    raw: &[u8],
+    curr_index: &mut usize,
+    should_allocate: bool,
+) -> io::Result<String> {
     let start_index = *curr_index;
     let desired_range = start_index..(start_index + 10);
     let line = raw.get(desired_range)
@@ -353,7 +430,11 @@ pub fn parse_committer(raw: &[u8], curr_index: &mut usize) -> io::Result<String>
         .ok_or_else(|| ioerr!("Failed to find newline when parsing committer line"))?;
 
     let committer_line = &rest_of_data[0..newline_index];
-    let committer_str = String::from_utf8_lossy(committer_line);
+    let committer_str = if should_allocate {
+        String::from_utf8_lossy(committer_line).into()
+    } else {
+        String::with_capacity(0)
+    };
     // at the end of the committer line, there should be 2 newlines.
     // we verify that here:
     if rest_of_data[newline_index + 1] != b'\n' {
@@ -362,7 +443,7 @@ pub fn parse_committer(raw: &[u8], curr_index: &mut usize) -> io::Result<String>
     // and then we make sure to add 2 to the current index
     // instead of just 1, because we have 2 newlines:
     *curr_index = start_index + 10 + newline_index + 2;
-    Ok(committer_str.into())
+    Ok(committer_str)
 }
 
 pub fn parse_tree(raw: &[u8]) -> io::Result<(Oid, usize)> {
