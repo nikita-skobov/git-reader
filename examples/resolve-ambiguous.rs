@@ -1,6 +1,10 @@
 use std::{path::PathBuf, io, collections::BTreeSet, time::Instant};
-use git_walker::{ioerr, object_database::UnparsedObjectDB, object_id::{hex_u128_to_str, PartialOid, hash_str_to_oid, Oid}};
-use git_walker::{printoid, object_database::{LightObjectDB, PartialSearchResult}, eprintoid};
+use git_walker::{ioerr, object_id::{hex_u128_to_str, PartialOid, hash_str_to_oid, Oid}};
+use git_walker::{printoid, object_database::{LightObjectDB}, eprintoid};
+
+/// given a path to the git objects db, and a partial OID, try
+/// to resolve it to a single OID, or otherwise report if there
+/// are other OIDs that are similar to it.
 
 pub fn realmain() -> io::Result<()> {
     let args = std::env::args().collect::<Vec<_>>();
