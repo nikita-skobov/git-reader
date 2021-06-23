@@ -86,6 +86,14 @@ pub struct TreeEntry {
     pub entry_mode: TreeMode,
 }
 
+/// Warning, using this will make your object DB not traversible...
+/// only use this for stuff like logging, where you might
+/// not care about the tree.
+#[derive(Debug, Default)]
+pub struct TreeNone {
+
+}
+
 #[derive(Debug, Default)]
 pub struct TreeObject {
     pub entries: Vec<TreeEntry>,
@@ -101,6 +109,12 @@ impl ToString for TreeEntry {
         };
         let id_str = hex_u128_to_str(self.id);
         format!("{} {} {}\t{}", mode_str, blob_or_tree, id_str, self.path_component)
+    }
+}
+
+impl Display for TreeNone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "treenone")
     }
 }
 
@@ -160,6 +174,12 @@ impl ParseTree for TreeObject {
         }
 
         Ok(object)
+    }
+}
+
+impl ParseTree for TreeNone {
+    fn parse(raw: &[u8]) -> io::Result<Self> where Self: Sized {
+        Ok(TreeNone {})
     }
 }
 
