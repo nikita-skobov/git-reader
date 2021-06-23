@@ -209,9 +209,22 @@ impl IDXFileLight {
         };
 
         let mut current_fanout_index = start_fanout_index;
-        for _ in 0..self.num_objects {
+        for _ in start_fanout_index..self.num_objects {
             // we always read SHA1_SIZE:
-            let sha_bytes = &self.file[start_index..(start_index + SHA1_SIZE)];
+            // NOTE: we should protect ourselves from reading
+            // too many objects in the above for loop start index,
+            // but just in case, we should stop iterating if we somehow
+            // reached the end of the file:
+            let sha_bytes = match self.file.get(start_index..(start_index + SHA1_SIZE)) {
+                Some(b) => b,
+                None => { break; }
+            };
+            // TODO: is there a way to restructure the loop condition
+            // to guarantee we are always reading valid byte ranges?
+            // also: is this sort of indexing even faster than using .get()?
+            // if not, just use .get() since its safer.
+            // this is potentially unsafe:
+            // // let sha_bytes = &self.file[start_index..(start_index + SHA1_SIZE)];
             let oid = full_slice_oid_to_u128_oid(&sha_bytes);
             let should_stop_iterating = cb(oid, current_fanout_index);
             if should_stop_iterating { break; }
