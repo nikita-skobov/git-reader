@@ -1,6 +1,6 @@
 
 
-use std::io;
+use std::{convert::TryFrom, io};
 use crate::{ioerre, ioerr};
 
 /// NOTE: we represent sha1 hash keys as u128, when they are really
@@ -22,9 +22,30 @@ pub type OidTruncated = [u8; 16];
 /// an OidTruncated which can be turned into an Oid
 pub struct OidStrTruncated(pub [u8; 32]);
 
+#[derive(Debug, Copy, Clone)]
+pub struct OidStrFull(pub [u8; 40]);
+
 impl Default for OidStrTruncated {
     fn default() -> Self {
         Self([b'0'; 32])
+    }
+}
+
+impl Default for OidStrFull {
+    fn default() -> Self {
+        Self([b'0'; 40])
+    }
+}
+
+impl TryFrom<OidStrFull> for OidFull {
+    type Error = io::Error;
+
+    fn try_from(value: OidStrFull) -> Result<Self, Self::Error> {
+        // first make it into a string:
+        let oid_str = std::str::from_utf8(&value.0).map_err(|e| ioerr!("{}", e))?;
+        let oid_full = full_oid_from_str(oid_str)
+            .ok_or_else(|| ioerr!("Failed to convert {} into an OidFull", oid_str))?;
+        Ok(oid_full)
     }
 }
 
@@ -179,6 +200,27 @@ pub fn full_oid_to_u128_oid(full: OidFull) -> Oid {
     let mut trunc = OidTruncated::default();
     trunc.copy_from_slice(&full[0..16]);
     trunc_oid_to_u128_oid(trunc)
+}
+
+/// an OidFull is 160 bits. an Oid is 128 bits.
+/// there are 32 bits remaining that can be
+/// combined with the Oid to regain the OidFull.
+pub fn full_oid_to_parts(full: OidFull) -> (Oid, u32) {
+    let mut trunc = OidTruncated::default();
+    trunc.copy_from_slice(&full[0..16]);
+    let oid = trunc_oid_to_u128_oid(trunc);
+    let last_4_bytes = [full[16], full[17], full[18], full[19]];
+    let remains = u32::from_be_bytes(last_4_bytes);
+    (oid, remains)
+}
+
+pub fn oid_parts_to_full(oid: Oid, rest: u32) -> OidFull {
+    let mut full = OidFull::default();
+    let oid_arr = oid.to_be_bytes();
+    let rest_arr = rest.to_be_bytes();
+    full[0..16].copy_from_slice(&oid_arr);
+    full[16..].copy_from_slice(&rest_arr);
+    full
 }
 
 /// Only call this if you know your slice has at least 16 bytes
