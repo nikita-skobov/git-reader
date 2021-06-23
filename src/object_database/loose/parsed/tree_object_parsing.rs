@@ -2,6 +2,9 @@
 use crate::{ioerr, object_id::{OidTruncated, Oid, trunc_oid_to_u128_oid, hex_u128_to_str}, ioerre};
 use std::{convert::TryFrom, io, fmt::Display};
 
+pub trait ParseTree: Display {
+    fn parse(raw: &[u8]) -> io::Result<Self> where Self: Sized;
+}
 
 /// See:
 /// https://stackoverflow.com/a/8347325
@@ -146,8 +149,8 @@ pub fn get_tree_entry(raw: &[u8], curr: &mut usize) -> io::Result<TreeEntry> {
     Ok(tree_entry)
 }
 
-impl TreeObject {
-    pub fn parse(raw: &[u8]) -> io::Result<TreeObject> {
+impl ParseTree for TreeObject {
+    fn parse(raw: &[u8]) -> io::Result<Self> where Self: Sized {
         let mut index = 0;
         let raw_len = raw.len();
         let mut object = TreeObject::default();
