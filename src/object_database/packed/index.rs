@@ -647,6 +647,31 @@ impl IDXFileLight {
         }
     }
 
+    /// Returns Ok(usize) if the Oid exists,
+    /// and if we were able to find its fanout index, ie (this is
+    /// the nth oid...).
+    pub fn find_oid_and_fanout_index(
+        &self,
+        oid: Oid
+    ) -> io::Result<usize> {
+        let mut found = None;
+        let first_byte = get_first_byte_of_oid(oid);
+        self.walk_all_oids_with_index_and_from(Some(first_byte), |found_oid, fanout_index| {
+            if found_oid == oid {
+                found = Some(fanout_index);
+                // indicate we want to stop iterating
+                return true;
+            }
+            false
+        });
+        match found {
+            Some(i) => Ok(i),
+            None => {
+                return ioerre!("Failed to find index of oid {:032x}", oid);
+            }
+        }
+    }
+
     /// pass a callback that takes an oid that we found,
     /// and returns true if you want to stop searching.
     /// if start_byte is some byte, we look for it in the fanout table
