@@ -422,23 +422,43 @@ impl<'a> LightObjectDB<'a> {
         Ok(transformed)
     }
 
-    pub fn get_packed_object<F>(
+    /// This is a helper function to first:
+    /// resolve an Oid given the idx file it should* be in,
+    /// and once resolved, load it from the associated pack file.
+    /// It is an error if the oid does not exist in this idx file.
+    pub fn get_packed_object_from_oid<F>(
+        &self,
+        oid: Oid,
+        idx_file: &IDXFileLight,
+        pack_file: &PackFile,
+    ) -> io::Result<UnparsedObject>
+        where F: TryFrom<UnparsedObject>,
+              F::Error: ToString,
+    {
+        // this is the fanout index we use to find the
+        // actual packfile index:
+        let oid_index = idx_file.find_oid_and_fanout_index(oid)?;
+        let pack_index = idx_file.find_packfile_index_from_fanout_index(oid_index)
+            .ok_or_else(|| ioerr!("Found oid index, but failed to find packfile index offset for {:032x}", oid))?;
+        let object_starts_at = pack_index;
+        let location_info = FoundPackedLocation {
+            id: idx_file.id,
+            object_starts_at,
+            oid_index,
+        };
+        self.get_packed_object_packfile_loaded(&location_info, pack_file)
+    }
+
+    /// Like `get_packed_object` but takes a pack file that has
+    /// already been loaded
+    pub fn get_packed_object_packfile_loaded<F>(
         &self,
         packed_info: &FoundPackedLocation,
+        pack: &PackFile
     ) -> io::Result<F>
         where F: TryFrom<UnparsedObject>,
               F::Error: ToString,
     {
-        // we need to first construct the path of this pack file:
-        let (
-            packfile_path_str_array, take_index
-        ) = self.get_pack_file_str_array(packed_info.id);
-        // make it into a string:
-        let search_path_str = std::str::from_utf8(&packfile_path_str_array[0..take_index])
-            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
-
-        // now read that file:
-        let pack = open_pack_file(search_path_str, packed_info.id)?;
         let obj_index: usize = packed_info.object_starts_at.try_into()
             .map_err(|_| ioerr!("Failed to convert u64 into usize in order to index the packfile. Your architecture might not allow {} to be represented as a usize.", packed_info.object_starts_at))?;
         let (
@@ -464,7 +484,58 @@ impl<'a> LightObjectDB<'a> {
         // if its a ref delta, we need to load the .idx file
         // to get the index of where its ref base object starts,
         // and then try again.
-        todo!()
+        let (idx_str_array, take_to) = self.get_idx_file_str_array(packed_info.id);
+        let idx_path_str = std::str::from_utf8(&idx_str_array[0..take_to])
+            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
+        let idx_file = open_idx_file_light(idx_path_str)?;
+        let base_oid = full_oid_to_u128_oid(ref_id);
+        // we want the unparsed data, so we make sure
+        // to specify that:
+        let unparsed_object = self.get_packed_object_from_oid::<UnparsedObject>(
+            base_oid, &idx_file, &pack)?;
+        // now that we have resolved the base object, we load our object:
+        let base_object_data = unparsed_object.payload;
+        let base_object_type = unparsed_object.object_type;
+
+        // next we load our data:
+        let this_object_data = pack.get_decompressed_data_from_index(obj_size, obj_starts_at)?;
+
+        // for our data, we need to extract the length:
+        let (_base_size, num_read) = find_encoded_length(&this_object_data)
+            .ok_or_else(|| ioerr!("Failed to find size of base object"))?;
+        let this_object_data = &this_object_data[num_read..];
+        let (our_size, num_read) = find_encoded_length(&this_object_data)
+            .ok_or_else(|| ioerr!("Failed to find size of object"))?;
+        let this_object_data = &this_object_data[num_read..];
+
+        let data_out = apply_delta(&base_object_data, this_object_data, our_size)?;
+        let unparsed_obj = UnparsedObject {
+            object_type: base_object_type,
+            payload: data_out
+        };
+        let transformed = F::try_from(unparsed_obj)
+            .map_err(|e| ioerr!("Failed to get packed object\n{}", e.to_string()))?;
+        Ok(transformed)
+    }
+
+    pub fn get_packed_object<F>(
+        &self,
+        packed_info: &FoundPackedLocation,
+    ) -> io::Result<F>
+        where F: TryFrom<UnparsedObject>,
+              F::Error: ToString,
+    {
+        // we need to first construct the path of this pack file:
+        let (
+            packfile_path_str_array, take_index
+        ) = self.get_pack_file_str_array(packed_info.id);
+        // make it into a string:
+        let search_path_str = std::str::from_utf8(&packfile_path_str_array[0..take_index])
+            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
+
+        // now read that file:
+        let pack = open_pack_file(search_path_str, packed_info.id)?;
+        self.get_packed_object_packfile_loaded(packed_info, &pack)
     }
 
     /// Get an object from its found location.
