@@ -47,6 +47,7 @@ pub const MAX_PATH_TO_DB_LEN: usize = 4096;
 
 /// get the ascii value of the platform's main seperator.
 /// / on Unix, \ on Windows
+#[inline(always)]
 pub fn main_sep_byte() -> u8 {
     match std::path::MAIN_SEPARATOR {
         // unix-like:
@@ -132,6 +133,7 @@ impl<'a> LightObjectDB<'a> {
     /// and return an array that can be turned into a stack
     /// allocated string, as well as the index that you should
     /// take the slice up to.
+    #[inline(always)]
     pub fn get_static_path_str(&self, extend_by: &[u8]) -> ([u8; MAX_PATH_TO_DB_LEN], usize) {
         let mut stack_arr = self.path_to_db_bytes;
         let extend_num = extend_by.len();
@@ -140,6 +142,7 @@ impl<'a> LightObjectDB<'a> {
         (stack_arr, take_slice_to)
     }
 
+    #[inline(always)]
     pub fn get_pack_file_str_array_from_hash(&self, hex_str: &[u8]) -> ([u8; MAX_PATH_TO_DB_LEN], usize) {
         // now we have our output str array:
         let mut out: [u8; 55] = [
@@ -167,6 +170,7 @@ impl<'a> LightObjectDB<'a> {
         self.get_idx_file_str_array_from_hash(&hex_str)
     }
 
+    #[inline(always)]
     pub fn get_idx_file_str_array_from_hash(&self, hex_str: &[u8]) -> ([u8; MAX_PATH_TO_DB_LEN], usize) {
         let mut out: [u8; 54] = [
             b'p', b'a', b'c', b'k', main_sep_byte(),
