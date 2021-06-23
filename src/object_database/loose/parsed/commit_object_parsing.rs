@@ -65,7 +65,7 @@ impl Display for CommitFull {
         for parent in self.extra_parents.iter() {
             parent_str = format!("{}\nparent {}", parent_str, hex_u128_to_str(*parent));
         }
-        write!(f, "tree {}\n{}\nauthor {}\ncommitter {}\n{}", tree_id_str, parent_str, self.author, self.committer, self.message)
+        write!(f, "tree {}\n{}\nauthor {}\ncommitter {}\n\n{}", tree_id_str, parent_str, self.author, self.committer, self.message)
     }
 }
 
@@ -191,7 +191,14 @@ pub fn parse_committer(raw: &[u8], curr_index: &mut usize) -> io::Result<String>
 
     let committer_line = &rest_of_data[0..newline_index];
     let committer_str = String::from_utf8_lossy(committer_line);
-    *curr_index = start_index + 10 + newline_index + 1;
+    // at the end of the committer line, there should be 2 newlines.
+    // we verify that here:
+    if rest_of_data[newline_index + 1] != b'\n' {
+        return ioerre!("Committer line did not end with 2 newlines");
+    }
+    // and then we make sure to add 2 to the current index
+    // instead of just 1, because we have 2 newlines:
+    *curr_index = start_index + 10 + newline_index + 2;
     Ok(committer_str.into())
 }
 
