@@ -31,6 +31,20 @@ pub struct CommitFull {
     pub message: String,
 }
 
+/// Unlike `CommitFull` this will actually parse the commit message
+/// and commit summary seperately, where the CommitFull just includes
+/// the entire message as one string.
+pub struct CommitFullMessageAndDescription {
+    pub tree: Oid,
+    pub parent_one: Oid,
+    pub parent_two: Oid,
+    pub extra_parents: Vec<Oid>,
+    pub author: String,
+    pub committer: String,
+    pub message: String,
+    pub description: String,
+}
+
 /// TODO: implement parsing
 pub struct CommitNoMessage {
     pub tree: Oid,
@@ -66,6 +80,26 @@ impl Display for CommitFull {
             parent_str = format!("{}\nparent {}", parent_str, hex_u128_to_str(*parent));
         }
         write!(f, "tree {}\n{}\nauthor {}\ncommitter {}\n\n{}", tree_id_str, parent_str, self.author, self.committer, self.message)
+    }
+}
+
+impl Display for CommitFullMessageAndDescription {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tree_id_str = hex_u128_to_str(self.tree);
+        let parent_str = if self.parent_one == 0 {
+            "".into()
+        } else {
+            format!("parent {}", hex_u128_to_str(self.parent_one))
+        };
+        let mut parent_str = if self.parent_two == 0 {
+            parent_str
+        } else {
+            format!("{}\nparent {}", parent_str, hex_u128_to_str(self.parent_two))
+        };
+        for parent in self.extra_parents.iter() {
+            parent_str = format!("{}\nparent {}", parent_str, hex_u128_to_str(*parent));
+        }
+        write!(f, "tree {}\n{}\nauthor {}\ncommitter {}\n\n{}\n\n{}", tree_id_str, parent_str, self.author, self.committer, self.message, self.description)
     }
 }
 
@@ -123,6 +157,47 @@ impl ParseCommit for CommitFull {
             message: message.into(),
         };
         Ok(obj)
+    }
+}
+
+impl ParseCommit for CommitFullMessageAndDescription {
+    fn parse_inner(
+        raw: &[u8],
+        current_index: &mut usize
+    ) -> io::Result<Self> where Self: Sized {
+        let full_commit = CommitFull::parse_inner(raw, current_index)?;
+        // now from the full commit we can just parse out the
+        // commit message/description by checking if theres 2 newlines
+        // in the message:
+        let new_obj = if let Some(newline_index) = full_commit.message.find("\n\n") {
+            // if we found a newline index then
+            // we have a message and a description:
+            let message = &full_commit.message[0..newline_index];
+            let description = &full_commit.message[(newline_index + 1)..];
+            CommitFullMessageAndDescription {
+                message: message.into(),
+                description: description.into(),
+                tree: full_commit.tree,
+                parent_one: full_commit.parent_one,
+                parent_two: full_commit.parent_two,
+                extra_parents: full_commit.extra_parents,
+                author: full_commit.author,
+                committer: full_commit.committer,
+            }
+        } else {
+            // otherwise its just a message, and there is no description:
+            CommitFullMessageAndDescription {
+                tree: full_commit.tree,
+                parent_one: full_commit.parent_one,
+                parent_two: full_commit.parent_two,
+                extra_parents: full_commit.extra_parents,
+                author: full_commit.author,
+                committer: full_commit.committer,
+                message: full_commit.message,
+                description: String::with_capacity(0),
+            }
+        };
+        Ok(new_obj)
     }
 }
 
