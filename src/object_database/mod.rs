@@ -368,9 +368,7 @@ impl<'a> LightObjectDB<'a> {
         (stack_arr, take_slice_to)
     }
 
-    pub fn get_pack_file_str_array(&self, oidfull: OidFull) -> ([u8; MAX_PATH_TO_DB_LEN], usize) {
-        // first form the "pack-{40hex}.pack" string array:
-        let hex_str = oid_full_to_string_no_alloc(oidfull);
+    pub fn get_pack_file_str_array_from_hash(&self, hex_str: &[u8]) -> ([u8; MAX_PATH_TO_DB_LEN], usize) {
         // now we have our output str array:
         let mut out: [u8; 55] = [
             b'p', b'a', b'c', b'k', main_sep_byte(),
@@ -379,7 +377,33 @@ impl<'a> LightObjectDB<'a> {
             b'.', b'p', b'a', b'c', b'k'
         ];
         // and we copy our hex str to replace the 40 0s:
-        out[10..50].copy_from_slice(&hex_str);
+        out[10..50].copy_from_slice(&hex_str[0..40]);
+        // now we have our filename, and pack/ part, we want
+        // to append it to our base object db path:
+        self.get_static_path_str(&out)
+    }
+
+    pub fn get_pack_file_str_array(&self, oidfull: OidFull) -> ([u8; MAX_PATH_TO_DB_LEN], usize) {
+        // first form the "pack-{40hex}.pack" string array:
+        let hex_str = oid_full_to_string_no_alloc(oidfull);
+        self.get_pack_file_str_array_from_hash(&hex_str)
+    }
+
+    pub fn get_idx_file_str_array(&self, oidfull: OidFull) -> ([u8; MAX_PATH_TO_DB_LEN], usize) {
+        // first form the "pack-{40hex}.idx" string array:
+        let hex_str = oid_full_to_string_no_alloc(oidfull);
+        self.get_idx_file_str_array_from_hash(&hex_str)
+    }
+
+    pub fn get_idx_file_str_array_from_hash(&self, hex_str: &[u8]) -> ([u8; MAX_PATH_TO_DB_LEN], usize) {
+        let mut out: [u8; 54] = [
+            b'p', b'a', b'c', b'k', main_sep_byte(),
+            b'p', b'a', b'c', b'k', b'-',
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            b'.', b'i', b'd', b'x'
+        ];
+        // and we copy our hex str to replace the 40 0s:
+        out[10..50].copy_from_slice(&hex_str[0..40]);
         // now we have our filename, and pack/ part, we want
         // to append it to our base object db path:
         self.get_static_path_str(&out)
@@ -552,14 +576,8 @@ impl<'a> LightObjectDB<'a> {
         &self,
         idx_file_name: &str,
     ) -> io::Result<IDXFileLight> {
-        let packs_dir = b"pack";
-        let (mut big_str_array, take_index) = self.get_static_path_str(packs_dir);
-        big_str_array[take_index] = main_sep_byte();
-        let file_name_len = idx_file_name.len();
-        let new_size = take_index + 1 + file_name_len;
-        let desired_range = (take_index + 1)..new_size;
-        big_str_array[desired_range].copy_from_slice(idx_file_name.as_bytes());
-        let search_path_str = std::str::from_utf8(&big_str_array[0..new_size])
+        let (idx_str_array, take_to) = self.get_idx_file_str_array_from_hash(idx_file_name.as_bytes());
+        let search_path_str = std::str::from_utf8(&idx_str_array[0..take_to])
             .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
         // println!("reading idx file: {}", search_path_str);
         let idx_file = open_idx_file_light(search_path_str)?;
