@@ -338,6 +338,17 @@ impl<'a> LightObjectDB<'a> {
         }
     }
 
+    pub fn get_object_by_oid<F>(
+        &self,
+        oid: Oid,
+    ) -> io::Result<F>
+        where F: TryFrom<UnparsedObject>,
+              F::Error: ToString,
+    {
+        let (_, location) = self.find_first_matching_oid_with_location(oid)?;
+        self.get_object_from_location(location)
+    }
+
     pub fn find_matching_oids_loose<F>(
         &self,
         partial_oid: PartialOid,
