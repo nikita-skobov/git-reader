@@ -45,6 +45,26 @@ pub struct CommitFullMessageAndDescription {
     pub description: String,
 }
 
+/// Like `CommitFullMessageAndDescription` we still
+/// seperate a message and description, but we don't
+/// parse the description part. ie: we only
+/// allocate for the message.
+pub struct CommitFullOnlyMessage {
+    pub tree: Oid,
+    pub parent_one: Oid,
+    pub parent_two: Oid,
+    pub extra_parents: Vec<Oid>,
+    pub author: String,
+    pub committer: String,
+    pub message: String,
+}
+
+/// Like `CommitFullOnlyMessage` but we don't parse the
+/// author or committer text
+pub struct CommitOnlyMessageNoAuthorOrCommitter {
+
+}
+
 /// TODO: implement parsing
 pub struct CommitNoMessage {
     pub tree: Oid,
@@ -64,6 +84,26 @@ pub struct CommitOnlyTreeAndParents {
 }
 
 impl Display for CommitFull {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tree_id_str = hex_u128_to_str(self.tree);
+        let parent_str = if self.parent_one == 0 {
+            "".into()
+        } else {
+            format!("parent {}", hex_u128_to_str(self.parent_one))
+        };
+        let mut parent_str = if self.parent_two == 0 {
+            parent_str
+        } else {
+            format!("{}\nparent {}", parent_str, hex_u128_to_str(self.parent_two))
+        };
+        for parent in self.extra_parents.iter() {
+            parent_str = format!("{}\nparent {}", parent_str, hex_u128_to_str(*parent));
+        }
+        write!(f, "tree {}\n{}\nauthor {}\ncommitter {}\n\n{}", tree_id_str, parent_str, self.author, self.committer, self.message)
+    }
+}
+
+impl Display for CommitFullOnlyMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let tree_id_str = hex_u128_to_str(self.tree);
         let parent_str = if self.parent_one == 0 {
@@ -148,6 +188,43 @@ impl ParseCommit for CommitFull {
         let message = String::from_utf8_lossy(commit_message_raw);
 
         let obj = CommitFull {
+            tree: only_tree_and_parents.tree,
+            parent_one: only_tree_and_parents.parent_one,
+            parent_two: only_tree_and_parents.parent_two,
+            extra_parents: only_tree_and_parents.extra_parents,
+            author,
+            committer,
+            message: message.into(),
+        };
+        Ok(obj)
+    }
+}
+
+impl ParseCommit for CommitFullOnlyMessage {
+    fn parse_inner(
+        raw: &[u8],
+        current_index: &mut usize
+    ) -> io::Result<Self> where Self: Sized {
+        let only_tree_and_parents = CommitOnlyTreeAndParents::parse_inner(raw, current_index)?;
+
+        // the hard part is done, now we can just parse the committer/author
+        // and message
+        let author = parse_author(raw, current_index)?;
+        let committer = parse_committer(raw, current_index)?;
+        let rest_of_data = &raw[*current_index..];
+        // for the only message mode, we wish to only allocate for the
+        // first part of the commit message, so we read up to
+        // the first newline we find. if we don't find the newline, then
+        // we take everything:
+        let message = if let Some(newline_index) = rest_of_data.iter().position(|b| *b == b'\n') {
+            let commit_message_raw = &rest_of_data[0..newline_index];
+            String::from_utf8_lossy(commit_message_raw)
+        } else {
+            let commit_message_raw = &rest_of_data[0..];
+            String::from_utf8_lossy(commit_message_raw)
+        };
+
+        let obj = CommitFullOnlyMessage {
             tree: only_tree_and_parents.tree,
             parent_one: only_tree_and_parents.parent_one,
             parent_two: only_tree_and_parents.parent_two,
