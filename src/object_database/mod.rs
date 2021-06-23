@@ -1,11 +1,12 @@
-use std::{path::{PathBuf, Path}, io, fs};
-use crate::{ioerre, object_id::{oid_full_to_string, Oid, PartialOid, hex_u128_to_str, full_oid_to_u128_oid, get_first_byte_of_oid, HEX_BYTES, hash_object_file_and_folder, OidFull}, ioerr, fs_helpers};
+use std::{path::{PathBuf, Path}, io, fs, convert::{TryInto, TryFrom}};
+use crate::{ioerre, object_id::{oid_full_to_string, Oid, PartialOid, hex_u128_to_str, full_oid_to_u128_oid, get_first_byte_of_oid, HEX_BYTES, hash_object_file_and_folder, OidFull, oid_full_to_string_no_alloc}, ioerr, fs_helpers};
 
 pub mod loose;
 use loose::*;
 
 pub mod packed;
 use packed::*;
+use io::Error;
 
 /// A type alias for an ObjectDB that stores raw
 /// data when resolved. ie: the data it stores
@@ -365,6 +366,105 @@ impl<'a> LightObjectDB<'a> {
         let take_slice_to = self.path_to_db_bytes_start + extend_num;
         stack_arr[self.path_to_db_bytes_start..take_slice_to].copy_from_slice(extend_by);
         (stack_arr, take_slice_to)
+    }
+
+    pub fn get_pack_file_str_array(&self, oidfull: OidFull) -> ([u8; MAX_PATH_TO_DB_LEN], usize) {
+        // first form the "pack-{40hex}.pack" string array:
+        let hex_str = oid_full_to_string_no_alloc(oidfull);
+        // now we have our output str array:
+        let mut out: [u8; 55] = [
+            b'p', b'a', b'c', b'k', main_sep_byte(),
+            b'p', b'a', b'c', b'k', b'-',
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            b'.', b'p', b'a', b'c', b'k'
+        ];
+        // and we copy our hex str to replace the 40 0s:
+        out[10..50].copy_from_slice(&hex_str);
+        // now we have our filename, and pack/ part, we want
+        // to append it to our base object db path:
+        self.get_static_path_str(&out)
+    }
+
+    pub fn get_loose_object<F, P: AsRef<Path>>(
+        &self,
+        loose_obj_path: P,
+    ) -> io::Result<F>
+        where F: TryFrom<UnparsedObject>,
+              F::Error: ToString,
+    {
+        let resolved_obj = read_raw_object(loose_obj_path, false)?;
+        let transformed = F::try_from(resolved_obj)
+            .map_err(|e| ioerr!("Failed to get loose object\n{}", e.to_string()))?;
+        Ok(transformed)
+    }
+
+    pub fn get_packed_object<F>(
+        &self,
+        packed_info: &FoundPackedLocation,
+    ) -> io::Result<F>
+        where F: TryFrom<UnparsedObject>,
+              F::Error: ToString,
+    {
+        // we need to first construct the path of this pack file:
+        let (
+            packfile_path_str_array, take_index
+        ) = self.get_pack_file_str_array(packed_info.id);
+        // make it into a string:
+        let search_path_str = std::str::from_utf8(&packfile_path_str_array[0..take_index])
+            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
+
+        // now read that file:
+        let pack = open_pack_file(search_path_str, packed_info.id)?;
+        let obj_index: usize = packed_info.object_starts_at.try_into()
+            .map_err(|_| ioerr!("Failed to convert u64 into usize in order to index the packfile. Your architecture might not allow {} to be represented as a usize.", packed_info.object_starts_at))?;
+        let (
+            obj_type, obj_size, obj_starts_at,
+        ) = pack.get_object_type_and_len_at_index(obj_index)?;
+
+        // obj size also needs to be converted to usize.
+        let obj_size: usize = obj_size.try_into()
+            .map_err(|_| ioerr!("Failed to convert u128 into usize in order to get object size. Your architecture might not allow {} to be represented as a usize.", obj_size))?;
+
+        // if anything but Ref delta, we should be safe to just
+        // call the pack and resolve it:
+        let ref_id = match obj_type {
+            PackFileObjectType::RefDelta(i) => i,
+            _ => {
+                let unparsed = pack.resolve_unparsed_object(obj_size, obj_starts_at, obj_type)?;
+                let transformed = F::try_from(unparsed)
+                    .map_err(|e| ioerr!("Failed to get packed object\n{}", e.to_string()))?;
+                return Ok(transformed);
+            }
+        };
+
+        // if its a ref delta, we need to load the .idx file
+        // to get the index of where its ref base object starts,
+        // and then try again.
+        todo!()
+    }
+
+    /// Get an object from its found location.
+    /// This involves first parsing/extracting the raw
+    /// data, and then transforming that data into your desired
+    /// output generic F. If you just want the raw data, you can
+    /// specify your generic as `UnparsedObject`, otherwise,
+    /// you can specify one of the parsed objects that implements
+    /// `UnparsedObject`
+    pub fn get_object_from_location<F>(
+        &self,
+        location: FoundObjectLocation
+    ) -> io::Result<F>
+        where F: TryFrom<UnparsedObject>,
+              F::Error: ToString,
+    {
+        match location {
+            FoundObjectLocation::FoundLoose(path) => {
+                self.get_loose_object(&path)
+            }
+            FoundObjectLocation::FoundPacked(info) => {
+                self.get_packed_object(&info)
+            }
+        }
     }
 
     pub fn find_matching_oids_loose<F>(
