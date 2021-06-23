@@ -102,12 +102,15 @@ impl ParseCommit for CommitFull {
         let committer = parse_committer(raw, current_index)?;
         let rest_of_data = &raw[*current_index..];
         // the rest of the data should be the commit message.
-        // we expect there to be 1 newline at the end:
-        let last_index = rest_of_data.len() - 1;
-        if rest_of_data[last_index] != b'\n' {
-            return ioerre!("Expected commit message to end in newline but it did not");
+        // we dont want trailing newlines though, so we do this:
+        let mut last_index = rest_of_data.len() - 1;
+        let mut last_char = rest_of_data[last_index];
+        while last_char == b'\n' {
+            last_index -= 1;
+            last_char = *rest_of_data.get(last_index)
+                .ok_or_else(|| ioerr!("Failed to trim newlines from commit message. Does your commit message consist entirely of new lines?"))?;
         }
-        let commit_message_raw = &rest_of_data[0..last_index];
+        let commit_message_raw = &rest_of_data[0..last_index + 1];
         let message = String::from_utf8_lossy(commit_message_raw);
 
         let obj = CommitFull {
