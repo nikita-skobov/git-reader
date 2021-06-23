@@ -576,7 +576,12 @@ impl<'a> LightObjectDB<'a> {
         &self,
         idx_file_name: &str,
     ) -> io::Result<IDXFileLight> {
-        let (idx_str_array, take_to) = self.get_idx_file_str_array_from_hash(idx_file_name.as_bytes());
+        // our file name should be at least 45 chars long:
+        // pack-{40hexchars}.idx
+        // we want just the 40 hex chars:
+        let idx_hex_str = idx_file_name.get(5..45)
+            .ok_or_else(|| ioerr!("Failed to extract hex chars from idx file name: {}", idx_file_name))?;
+        let (idx_str_array, take_to) = self.get_idx_file_str_array_from_hash(idx_hex_str.as_bytes());
         let search_path_str = std::str::from_utf8(&idx_str_array[0..take_to])
             .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
         // println!("reading idx file: {}", search_path_str);
