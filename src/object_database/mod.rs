@@ -57,16 +57,16 @@ pub fn main_sep_byte() -> u8 {
     }
 }
 
-/// A fairly different interface than ObjectDB, the LightObjectDB
-/// tries to minimize allocations at the cost of potentially
-/// slightly slower performance. One key difference between the
-/// light object DB is that it does not load all paths of loose objects,
-/// instead, when you wish to load a loose object, it has to first
-/// check if that loose object exists by making a file system call.
-/// if done repeatedly, this would amount to significantly more calls
-/// than using a regular ObjectDB, but a LightObjectDB is better
+/// The LightObjectDB tries to minimize allocations at the cost of potentially
+/// slightly slower performance.
+/// if used repeatedly, this would amount to significantly more calls
+/// to opening/closing files, but a LightObjectDB is better
 /// if you know you only need to lookup information once, as it requires
-/// less allocations
+/// less allocations.
+/// It is also possible to use light object DB efficiently
+/// by storing these files on your own, and using the appropriate
+/// helper functions that take references to the idx/pack files
+/// that you are holding on to.
 pub struct LightObjectDB<'a> {
     /// Should be absolute path to /.../.git/objects/
     pub path_to_db: &'a str,
