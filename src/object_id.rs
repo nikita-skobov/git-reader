@@ -1,6 +1,6 @@
 
 
-use std::{convert::TryFrom, io};
+use std::{convert::{TryInto, TryFrom}, io};
 use crate::{ioerre, ioerr};
 
 /// NOTE: we represent sha1 hash keys as u128, when they are really
@@ -179,6 +179,13 @@ pub fn hash_str_to_oid(hash: &str) -> io::Result<Oid> {
     oid_str_trunc.0[..].copy_from_slice(&trunc_str[..].as_bytes());
     let oid = oid_str_truncated_to_oid(oid_str_trunc)?;
     Ok(oid)
+}
+
+pub fn hash_object_file_and_folder_full(folder: &str, filename: &str) -> io::Result<OidFull> {
+    let mut oid_str = OidStrFull::default();
+    oid_str.0[0..2].copy_from_slice(&folder[0..2].as_bytes());
+    oid_str.0[2..40].copy_from_slice(&filename[0..38].as_bytes());
+    oid_str.try_into()
 }
 
 pub fn hash_object_file_and_folder(folder: &str, filename: &str) -> io::Result<Oid> {
