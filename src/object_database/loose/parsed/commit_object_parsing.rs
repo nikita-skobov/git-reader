@@ -408,6 +408,65 @@ pub fn parse_author(
     Ok(author_str)
 }
 
+/// this function is a misnomer. its purpose is to SKIP the mergetag string
+/// for now, I do not care about the merge tag's significance, but
+/// in the future maybe mergetag parsing will be necessary. for now we just
+/// skip over it if we detect it:
+pub fn parse_mergetag(
+    raw: &[u8],
+    curr_index: &mut usize
+) -> io::Result<()> {
+    let start_index = *curr_index;
+    let desired_range = start_index..(start_index + 9);
+    let line = raw.get(desired_range)
+        .ok_or_else(|| ioerr!("First line not long enough to contain mergetag string"))?;
+    if &line[0..9] != b"mergetag " {
+        return ioerre!("Expected first line of mergetag line to contain 'mergetag'");
+    }
+    // for now we dont do any merge tag parsing, we just want to
+    // advance the current index to the end of the merge tag.
+    let current_data = &raw[start_index..];
+    let mut skip_chars = 0;
+    let mut last_char_was_newline = false;
+    for byte in current_data {
+        if last_char_was_newline {
+            // our last char was a newline. if our current char
+            // is a space then we are still parsing the mergetag object
+            if *byte == b' ' {
+                last_char_was_newline = false;
+                skip_chars += 1;
+            } else if *byte == b'\n' {
+                // this indicates we are done parsing the mergetag
+                // data.
+                // still need to skip 1 char because this is a newline
+                // and we dont want the message parsing to start
+                // on a newline
+                skip_chars += 1;
+                break;
+            } else {
+                // this is possibly another merge tag?
+                // lets set our current index to the current skip_chars
+                // and recurse:
+                *curr_index += skip_chars;
+                parse_mergetag(raw, curr_index)?;
+                return Ok(());
+            }
+        } else {
+            // we arent immediately after a newline, so
+            // just increment the skip chars count
+            // and continue
+            skip_chars += 1;
+
+            // but we also have to check if our CURRENT
+            // char is a newline, if so we set
+            // last_char_was_newline for next iteration to check
+            last_char_was_newline = *byte == b'\n';
+        }
+    }
+    *curr_index += skip_chars;
+    Ok(())
+}
+
 /// If should allocate is false, we dont actually create a string.
 /// This is useful for when you want to only advance the `curr_index` but
 /// you don't care about the author string
@@ -435,14 +494,23 @@ pub fn parse_committer(
     } else {
         String::with_capacity(0)
     };
+
     // at the end of the committer line, there should be 2 newlines.
-    // we verify that here:
+    // we verify that here. If there is not 2 newlines, then
+    // this should be a mergetag object
     if rest_of_data[newline_index + 1] != b'\n' {
-        return ioerre!("Committer line did not end with 2 newlines");
+        // we add 1 here to skip the one newline that we DID find above,
+        // so now the current index should point to the beginning of the merge
+        // tag object.
+        *curr_index = start_index + 10 + newline_index + 1;
+        // for now we dont implement actually parsing the
+        // merge tag, instead we just want to advance the current index
+        // past it.
+        parse_mergetag(raw, curr_index)?;
+    } else {
+        // if we did find 2 trailing newlines, we add 2
+        *curr_index = start_index + 10 + newline_index + 2;
     }
-    // and then we make sure to add 2 to the current index
-    // instead of just 1, because we have 2 newlines:
-    *curr_index = start_index + 10 + newline_index + 2;
     Ok(committer_str)
 }
 
