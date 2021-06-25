@@ -6,7 +6,7 @@ edition = "2018"
 [dependencies]
 memmap2 = "0.3.0"
 byteorder = "1.4.3"
-flate2 = "1.0.20"
+flate2 = { version = "1.0.20", features = ["zlib-ng-compat"], default-features = false }
 tinyvec = { version = "1.2.0", features = ["alloc"] }
 
 [profile.release]
