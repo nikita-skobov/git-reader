@@ -31,7 +31,7 @@ pub trait LightState {
     /// it should iterate the known loose oids, and
     /// call the user's callback for every partial match
     fn knows_loose_oids_for_byte<F, P: DoesMatch>(&self, b: u8, partial: P, cb: &mut F)
-        -> bool where F: FnMut(Oid);
+        -> bool where F: FnMut(Oid, OidFull);
 
     fn learn_pack_id(&mut self, pack_id: OidFull);
 
@@ -158,7 +158,9 @@ pub fn find_matching_oids_loose<F, P: DoesMatch, S: LightState>(
     where F: FnMut(Oid)
 {
     let first_byte = partial_oid.get_first_byte();
-    let state_knows = state.knows_loose_oids_for_byte(first_byte, partial_oid, cb);
+    let state_knows = state.knows_loose_oids_for_byte(first_byte, partial_oid, &mut |oid, _| {
+        cb(oid);
+    });
     if state_knows { return Ok(()); }
 
     // otherwise, the state does not know that loose oid folder yet,
@@ -310,7 +312,7 @@ impl LightState for LightStateDB {
     }
 
     fn knows_loose_oids_for_byte<F, P: DoesMatch>(&self, b: u8, partial: P, cb: &mut F)
-        -> bool where F: FnMut(Oid)
+        -> bool where F: FnMut(Oid, OidFull)
     {
         let byte_usize = b as usize;
         // if we dont have any objects at that
@@ -318,9 +320,9 @@ impl LightState for LightStateDB {
 
         // otherwise we do, so lets iterate over it and return all partial
         // matches:
-        for (oid, _oid_full) in self.loose_map[byte_usize].iter() {
+        for (oid, oid_full) in self.loose_map[byte_usize].iter() {
             if partial.matches(*oid) {
-                cb(*oid);
+                cb(*oid, *oid_full);
             }
         }
         true
