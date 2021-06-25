@@ -21,6 +21,25 @@ pub fn search_folder<P, F, T>(
     Ok(out)
 }
 
+/// an alternative to `search_folder`.
+/// this returns as soon as your callback returns an error.
+pub fn search_folder_out<P, F>(
+    path: P,
+    should_use_entry: F
+) -> io::Result<()> where
+    P: AsRef<Path>,
+    F: FnMut(&DirEntry) -> io::Result<()>
+{
+    let mut should_use_entry = should_use_entry;
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        if let Err(e) = should_use_entry(&entry) {
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
 
 pub fn get_mmapped_file<P: AsRef<Path>>(
     path: P,
