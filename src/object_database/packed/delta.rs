@@ -1,5 +1,6 @@
 use std::io;
-use crate::ioerre;
+use crate::{object_database::loose::UNPARSED_PAYLOAD_STATIC_SIZE, ioerre};
+use tinyvec::{tiny_vec, TinyVec};
 
 /// No clue how this works to be honest.
 /// I copied it directly from:
@@ -9,8 +10,9 @@ pub fn apply_delta(
     base_data: &[u8],
     delta_data: &[u8],
     output_len: usize
-) -> io::Result<Vec<u8>> {
-    let mut output = vec![0; output_len];
+) -> io::Result<TinyVec<[u8; UNPARSED_PAYLOAD_STATIC_SIZE]>> {
+    let mut output = tiny_vec!([u8; UNPARSED_PAYLOAD_STATIC_SIZE]);
+    output.resize(output_len, 0);
     let delta_len = delta_data.len();
 
     let mut result_pos = 0;

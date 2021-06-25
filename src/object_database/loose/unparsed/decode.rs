@@ -2,7 +2,8 @@ use crate::{fs_helpers, ioerr, ioerre};
 use std::{io, path::Path, fs::File, fmt::Debug, str::FromStr};
 use flate2::{Decompress, Status, FlushDecompress};
 use io::{BufRead, Read};
-use super::{UnparsedObject, UnparsedObjectType};
+use super::{UnparsedObject, UnparsedObjectType, UNPARSED_PAYLOAD_STATIC_SIZE};
+use tinyvec::tiny_vec;
 
 /// returns the type of object, the size of the actual decompressed object
 /// (the value the object header), and the index of where the
@@ -155,6 +156,7 @@ pub fn decompress_remaining(
 pub fn read_raw_object<P: AsRef<Path>>(
     path: P,
     should_read_blobs: bool,
+    decompressor: &mut Decompress,
 ) -> io::Result<UnparsedObject> {
     let mut file = fs_helpers::get_readonly_handle(&path)?;
 
@@ -164,7 +166,7 @@ pub fn read_raw_object<P: AsRef<Path>>(
         // read it, so we just return with an empty vec:
         return Ok(UnparsedObject {
             object_type: first_read_info.object_type,
-            payload: vec![],
+            payload: tiny_vec!(),
         })
     }
 
@@ -190,8 +192,9 @@ pub fn read_raw_object<P: AsRef<Path>>(
     // it should be the size of the payload that we decoded from the header
     let output_buffer = first_read_info.decompressed_buf;
     let desired_output_buffer_len = first_read_info.payload_size;
-    let mut desired_out = vec![0; desired_output_buffer_len];
-    let bytes_read_out_so_far = first_read_info.decompressor.total_out() as usize;
+    let mut desired_out = tiny_vec!([u8; UNPARSED_PAYLOAD_STATIC_SIZE]);
+    desired_out.resize(desired_output_buffer_len, 0);
+    let bytes_read_out_so_far = decompressor.total_out() as usize;
     // because the original output buffer might have some data in it other
     // than the header, we want to copy that to the beginning of this new output
     // buffer.

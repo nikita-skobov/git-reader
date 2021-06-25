@@ -1,9 +1,10 @@
 use std::{io, path::{Path, PathBuf}, convert::{TryInto, TryFrom}};
-use crate::{fs_helpers, object_id::{oid_full_to_string, OidFull}, ioerre, ioerr, object_database::loose::{UnparsedObjectType, UnparsedObject}};
+use crate::{fs_helpers, object_id::{oid_full_to_string, OidFull}, ioerre, ioerr, object_database::loose::{UnparsedObjectType, UnparsedObject, UNPARSED_PAYLOAD_STATIC_SIZE}};
 use byteorder::{ByteOrder, BigEndian};
 use memmap2::Mmap;
 use super::{apply_delta, parse_pack_or_idx_id};
 use flate2::{FlushDecompress, Decompress};
+use tinyvec::{TinyVec, tiny_vec};
 
 
 pub const PACK_SIGNATURE: &[u8; 4] = b"PACK";
@@ -264,7 +265,8 @@ impl PackFile {
         &self,
         decompressed_size: usize,
         starts_at: usize,
-    ) -> io::Result<Vec<u8>> {
+        decompressor: &mut Decompress,
+    ) -> io::Result<TinyVec<[u8; UNPARSED_PAYLOAD_STATIC_SIZE]>> {
         // Is it guaranteed that compressed data is ALWAYS smaller
         // than the decompressed output? This is quite an assumption here...
         // to be safe, we will extend it by 128 bytes. But then
@@ -281,7 +283,9 @@ impl PackFile {
         let compressed_data = self.mmapped_file.get(compressed_data_range)
             .ok_or_else(|| ioerr!("Failed to read compressed data of pack file"))?;
 
-        let mut out_vec = vec![0; decompressed_size];
+        // let mut out_vec = vec![0; decompressed_size];
+        let mut out_vec = tiny_vec!([u8; UNPARSED_PAYLOAD_STATIC_SIZE]);
+        out_vec.resize(decompressed_size, 0);
         // we expect a git object to contain a zlib header
         let will_contain_zlib_header = true;
         let mut decompressor = Decompress::new(will_contain_zlib_header);
@@ -318,7 +322,9 @@ impl PackFile {
                 let next_obj_size: usize = next_obj_size.try_into()
                     .map_err(|_| ioerr!("Failed to convert {} into a usize. Either we failed at parsing this value, or your architecture does not support numbers this large", next_obj_size))?;
                 let base_raw_data = self.resolve_unparsed_object(next_obj_size, next_obj_index, next_obj_type)?;
-                let our_data = self.get_decompressed_data_from_index(decompressed_size, starts_at)?;
+                // TODO: dont make this every iteration
+                let mut decompressor = Decompress::new(true);
+                let our_data = self.get_decompressed_data_from_index(decompressed_size, starts_at, &mut decompressor)?;
                 (base_raw_data, our_data)
             }
 
@@ -336,7 +342,9 @@ impl PackFile {
             PackFileObjectType::Tree |
             PackFileObjectType::Blob |
             PackFileObjectType::Tag => {
-                let data = self.get_decompressed_data_from_index(decompressed_size, starts_at)?;
+                // TODO: dont make this every iteration...
+                let mut decompressor = Decompress::new(true);
+                let data = self.get_decompressed_data_from_index(decompressed_size, starts_at, &mut decompressor)?;
                 // safe to unwrap because we know we are only passing a
                 // simple type that can be converted:
                 let unparsed_type = object_type.into_unparsed_type().unwrap();
