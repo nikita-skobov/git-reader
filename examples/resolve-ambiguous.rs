@@ -1,6 +1,6 @@
 use std::{path::PathBuf, io, collections::BTreeSet, time::Instant};
 use git_walker::{ioerr, object_id::{hex_u128_to_str, PartialOid, hash_str_to_oid, Oid}};
-use git_walker::{printoid, object_database::{LightObjectDB}, eprintoid};
+use git_walker::{printoid, object_database::{LightObjectDB, state::{find_matching_oids_loose, LightStateDB, find_matching_oids}}, eprintoid};
 
 /// given a path to the git objects db, and a partial OID, try
 /// to resolve it to a single OID, or otherwise report if there
@@ -14,10 +14,10 @@ pub fn realmain() -> io::Result<()> {
         .ok_or_else(|| ioerr!("Must provide an OID to search"))?;
 
     let now = Instant::now();
-    let odb = LightObjectDB::new(&path)?;
+    let mut state = LightStateDB::new(path)?;
     let partial_oid =  PartialOid::from_hash(ambiguous_oid)?;
     let mut found_set = BTreeSet::new();
-    odb.find_matching_oids(partial_oid, |oid| {
+    find_matching_oids(partial_oid, &mut state, &mut |oid| {
         found_set.insert(oid);
     })?;
 
