@@ -47,9 +47,6 @@ pub struct FirstReadInfo {
     /// this is the buffer of what has been decompressed so far
     pub decompressed_buf: [u8; 128],
     pub object_type: UnparsedObjectType,
-    /// a zlib decompressor. should contain the state necessary
-    /// to continue decompressing if necessary
-    pub decompressor: Decompress,
     /// every time you call decompressor.decompress(...)
     /// you get returned a state of if its done, has more to read/output, or
     /// had an error. It is HIGHLY unlikely that this decompressed state
@@ -60,10 +57,10 @@ pub struct FirstReadInfo {
 pub fn read_and_extract_header<D: Debug>(
     file: &mut File,
     filename: D,
+    decompressor: &mut Decompress,
 ) -> io::Result<FirstReadInfo> {
     // we expect a git object to contain a zlib header
     let will_contain_zlib_header = true;
-    let mut decompressor = Decompress::new(will_contain_zlib_header);
     
     // only read 2kb at first.
     // this should be guaranteed to contain the header,
@@ -98,7 +95,6 @@ pub fn read_and_extract_header<D: Debug>(
         payload_size,
         compressed_buf: buf,
         object_type: UnparsedObjectType::from_str(object_type)?,
-        decompressor,
         decompressed_state,
         decompressed_buf: header_buf,
     };
@@ -160,7 +156,7 @@ pub fn read_raw_object<P: AsRef<Path>>(
 ) -> io::Result<UnparsedObject> {
     let mut file = fs_helpers::get_readonly_handle(&path)?;
 
-    let first_read_info = read_and_extract_header(&mut file, path.as_ref())?;
+    let first_read_info = read_and_extract_header(&mut file, path.as_ref(), decompressor)?;
     if !should_read_blobs && first_read_info.object_type == UnparsedObjectType::Blob {
         // this is a blob, and the user did not want to
         // read it, so we just return with an empty vec:
@@ -207,7 +203,6 @@ pub fn read_raw_object<P: AsRef<Path>>(
     // eprintln!("Desired output len: {}", desired_out.len());
     desired_out[0..desired_bytes].copy_from_slice(desired_slice_to_copy);
     let mut output_buffer = desired_out;
-    let mut decompressor = first_read_info.decompressor;
     let bytes_input = decompressor.total_in() as usize;
     let bytes_out = bytes_read_out_so_far - desired_data_starts_at;
 
@@ -216,7 +211,7 @@ pub fn read_raw_object<P: AsRef<Path>>(
     // an output buffer of 128 bytes?
     decompress_remaining(
         &mut &entire_file_buf[bytes_input..],
-        &mut decompressor,
+        decompressor,
         &mut output_buffer[bytes_out..],
     ).map_err(|e| ioerr!("Failed to decompress remaining bytes of {:?}\n{}", path.as_ref(), e))?;
 
