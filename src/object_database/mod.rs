@@ -8,7 +8,7 @@ pub mod packed;
 use packed::*;
 use flate2::Decompress;
 
-pub mod state;
+pub mod light_state;
 
 
 /// A trait used to see if 2 Oids match.

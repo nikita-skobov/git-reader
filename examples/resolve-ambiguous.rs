@@ -1,6 +1,6 @@
 use std::{path::PathBuf, io, collections::BTreeSet, time::Instant};
 use git_walker::{ioerr, object_id::{hex_u128_to_str, PartialOid, hash_str_to_oid, Oid}};
-use git_walker::{printoid, object_database::{LightObjectDB, state::{find_matching_oids_loose, LightStateDB, find_matching_oids}}, eprintoid};
+use git_walker::{printoid, object_database::{LightObjectDB, light_state::{find_matching_oids_loose, LightStateDB, find_matching_oids}}, eprintoid};
 
 /// given a path to the git objects db, and a partial OID, try
 /// to resolve it to a single OID, or otherwise report if there
