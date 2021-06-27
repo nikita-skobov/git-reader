@@ -1,8 +1,9 @@
 
 use flate2::Decompress;
-use crate::{ioerr, object_id::{Oid, OidFull, oid_full_to_string_no_alloc, get_first_byte_of_oid, HEX_BYTES, hash_object_file_and_folder}, ioerre, fs_helpers};
-use std::io;
-use super::{main_sep_byte, MAX_PATH_TO_DB_LEN, packed::{open_idx_file_light, IDXFileLight, parse_pack_or_idx_id}, DoesMatch, FoundPackedLocation, FoundObjectLocation};
+use crate::{ioerr, object_id::{Oid, OidFull, oid_full_to_string_no_alloc, get_first_byte_of_oid, HEX_BYTES, hash_object_file_and_folder, hash_object_file_and_folder_full}, ioerre, fs_helpers};
+use std::{collections::BTreeMap, io};
+use super::{main_sep_byte, MAX_PATH_TO_DB_LEN, packed::{open_idx_file_light, IDXFileLight, parse_pack_or_idx_id}, DoesMatch, FoundPackedLocation, FoundObjectLocation, light_state::default_loose_map};
+use tinyvec::{tiny_vec, TinyVec};
 
 pub enum OwnedOrBorrowedMut<'a, T> {
     Owned(T),
@@ -81,6 +82,24 @@ pub trait State {
         // now we have our filename, and pack/ part, we want
         // to append it to our base object db path:
         self.get_static_path_str(&out)
+    }
+
+    #[inline(always)]
+    fn get_loose_item_str_array(&self, oid_full: OidFull) -> io::Result<(usize, [u8; MAX_PATH_TO_DB_LEN])> {
+        let oid_full_str = oid_full_to_string_no_alloc(oid_full);
+        let oid_full_str = std::str::from_utf8(&oid_full_str)
+            .map_err(|_| ioerr!("Failed to convert oid into string"))?;
+
+        let oid_full_str_bytes = oid_full_str.as_bytes();
+        let mut out: [u8; 41] = [
+            oid_full_str_bytes[0], oid_full_str_bytes[1], main_sep_byte(),
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        // so right now we have "[hex0][hex1]/000000000..."
+        // so we just copy the remaining full str bytes
+        // into the 0s:
+        out[3..].copy_from_slice(&oid_full_str_bytes[2..]);
+        Ok(self.get_static_path_str(&out))
     }
 }
 
@@ -259,5 +278,182 @@ impl State for MinState {
             stop_searching = cb(self, idx_id);
             Ok(())
         })
+    }
+}
+
+pub struct SlightlyBetterState {
+    pub fallback: MinState,
+    pub loose_map: [BTreeMap<Oid, OidFull>; 256],
+    pub known_packs: TinyVec<[OidFull; 64]>,
+}
+
+impl SlightlyBetterState {
+    pub fn new(path: &str) -> io::Result<SlightlyBetterState> {
+        let min = MinState::new(path)?;
+        Ok(SlightlyBetterState {
+            fallback: min,
+            loose_map: default_loose_map(),
+            known_packs: tiny_vec!(),
+        })
+    }
+
+    pub fn iter_loose_folder_from_map<F>(&mut self, folder_byte: usize, cb: &mut F) -> io::Result<()>
+        where F: FnMut(Oid, &str, &str) -> bool
+    {
+        // otherwise we do, so lets iterate over it and return all partial
+        // matches:
+        for (oid, oid_full) in self.loose_map[folder_byte].iter() {
+            // TODO: optimization here.. we don't know if
+            // the user wants this oid or not, but yet we are
+            // spending time creating a string for it!.
+            // we should make the callback an enum of information, so
+            // the user decides what to do with the information they get.
+            // ie: we can just give them the oid_full, and if they want,
+            // they can do this transformation:
+            let (take_to, big_arr) = self.get_loose_item_str_array(*oid_full)?;
+            let big_str = std::str::from_utf8(&big_arr[0..take_to])
+                .map_err(|_| ioerr!("Failed to convert loose object path to string"))?;
+            // the last 38 characters are the hex str of the file,
+            // and everything before that is the full path:
+            let big_str_len = big_str.len();
+            let file_starts_at = big_str_len - 38;
+            // callback expectects 2nd element to be the hex folder name,
+            // and the 3rd to be the remaining 38 hex chars...
+            let stop_calling = cb(*oid, &big_str[0..file_starts_at], &big_str[file_starts_at..]);
+            if stop_calling {
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    pub fn iter_packs_from_known<F>(&mut self, cb: &mut F) -> io::Result<()>
+        where F: FnMut(&mut Self, OidFull) -> bool
+    {
+        let known_packs_len = self.known_packs.len();
+        for i in 0..known_packs_len {
+            let pack_id = self.known_packs[i];
+            let stop_calling = cb(self, pack_id);
+            if stop_calling {
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+}
+
+impl State for SlightlyBetterState {
+    type Idx = IDXFileLight;
+
+    fn get_decompressor(&mut self) -> &mut Decompress {
+        &mut self.fallback.decompressor
+    }
+
+    fn get_idx_file(&mut self, id: OidFull) -> io::Result<OwnedOrBorrowedMut<Self::Idx>> {
+        self.fallback.get_idx_file(id)
+    }
+
+    fn iter_loose_folder<F>(&mut self, folder_byte: u8, cb: &mut F) -> io::Result<()>
+        where F: FnMut(Oid, &str, &str) -> bool
+    {
+        // if we have previously saved information
+        // in our loose map, use that instead of
+        // reading the files again:
+        let folder_usize = folder_byte as usize;
+        if ! self.loose_map[folder_usize].is_empty() {
+            return self.iter_loose_folder_from_map(folder_usize, cb);
+        }
+
+        // otherwise we don't have that information yet, so
+        // we want to do 2 things:
+        // - we want to save that knowledge for future iterations
+        // - we want to still return the desired result to the user
+        // however, the user asked us in the callback to stop calling
+        // after they found the data they want, so we don't want
+        // to call their callback if they return true.
+        // HOWEVER, we ourselves want to finish iterating because
+        // we want to find all of the knowledge we have
+        // from this readdir call in order to avoid repeating it.
+        let mut stop_calling = false;
+        let mut map = BTreeMap::new();
+        let hex_key = HEX_BYTES[folder_usize];
+        // safe because all HEX_BYTES are valid utf8 combos
+        let hex_key_str = unsafe { std::str::from_utf8_unchecked(&hex_key) };
+        let res = self.fallback.iter_loose_folder(folder_byte, &mut |oid, folder, file| {
+            // we wish to get the full oid from this
+            // information in order to save it in our map:
+            // we know the hex key from the folder requested,
+            // but we combine that with the 38 hex char filename
+            // to get the whole OidFull:
+            let oid_full = match hash_object_file_and_folder_full(hex_key_str, file) {
+                Ok(o) => o,
+                // i cant imagine this ever failing?
+                Err(e) => {
+                    panic!("How did hash object file and folder fail?... {}", e);
+                }
+            };
+            map.insert(oid, oid_full);
+            if !stop_calling {
+                stop_calling = cb(oid, folder, file);
+            }
+            // regardless of if the user wants to stop calling or not,
+            // we always say false: ie: always finish iteration
+            false
+        });
+        self.loose_map[folder_usize] = map;
+        res
+    }
+
+    // unfortunately due to having Self in the callback,
+    // we cant simply reuse the fallback.iter_known_packs...
+    // TODO: is there a way where we CAN reuse it?...
+    fn iter_known_packs<F>(&mut self, cb: &mut F) -> io::Result<()>
+        where F: FnMut(&mut Self, OidFull) -> bool
+    {
+        // first check if we've found the packs/ folder before:
+        if ! self.known_packs.is_empty() {
+            return self.iter_packs_from_known(cb);
+        }
+
+        // otherwise we search through it, and for every
+        // idx path we find, we save it to our known packs
+        // so future calls dont have to readdir.
+
+        // first we load every .idx file we find in the database/packs
+        // directory
+        let packs_dir = b"pack";
+        let (take_index, big_str_array) = self.get_static_path_str(packs_dir);
+        let search_path_str = std::str::from_utf8(&big_str_array[0..take_index])
+            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
+        let mut stop_searching = false;
+        fs_helpers::search_folder_out(&search_path_str, |entry| {
+            if stop_searching { return Ok(()); }
+            let filename = entry.file_name();
+            let filename = match filename.to_str() {
+                Some(s) => s,
+                None => return Ok(()),
+            };
+            if ! filename.ends_with(".idx") {
+                return Ok(());
+            }
+            let idx_id = match parse_pack_or_idx_id(filename) {
+                Some(i) => i,
+                None => return Ok(()),
+            };
+
+            // we always want to push this idx id we found
+            self.known_packs.push(idx_id);
+            if !stop_searching {
+                // if user says to stop searching, we still keep
+                // reading the directory, we just stop
+                // calling their callback.
+                stop_searching = cb(self, idx_id);
+            }
+            Ok(())
+        })
+    }
+
+    fn get_path_to_db_as_bytes(&self) -> (usize, [u8; MAX_PATH_TO_DB_LEN]) {
+        self.fallback.get_path_to_db_as_bytes()
     }
 }
