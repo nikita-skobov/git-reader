@@ -1,8 +1,8 @@
 
 use flate2::Decompress;
-use crate::{ioerr, object_id::{Oid, OidFull, oid_full_to_string_no_alloc}, ioerre};
+use crate::{ioerr, object_id::{Oid, OidFull, oid_full_to_string_no_alloc, get_first_byte_of_oid}, ioerre};
 use std::io;
-use super::{main_sep_byte, MAX_PATH_TO_DB_LEN, packed::{open_idx_file_light, IDXFileLight}};
+use super::{main_sep_byte, MAX_PATH_TO_DB_LEN, packed::{open_idx_file_light, IDXFileLight}, DoesMatch, FoundPackedLocation, FoundObjectLocation};
 
 pub enum OwnedOrBorrowedMut<'a, T> {
     Owned(T),
@@ -31,6 +31,12 @@ pub trait State {
 
     fn get_decompressor(&mut self) -> &mut Decompress;
     fn get_idx_file(&mut self, id: OidFull) -> io::Result<OwnedOrBorrowedMut<Self::Idx>>;
+    /// like `get_idx_file` but guarantees that the result is owned.
+    /// as the caller, you MUST guarantee that you return this
+    /// idx file back when done with it. THe only reason
+    /// this call is necessary is because there are certain operations
+    /// where we need exclusive access to an owned idx file.
+    fn get_idx_file_owned(&mut self, id: OidFull) -> io::Result<Self::Idx>;
 
     /// this is necessary in order to prevent re-allocating pathbufs each time we
     /// wish to read a file. Instead, we can create a stack allocated array
@@ -83,6 +89,11 @@ pub trait IDXState {
     fn find_packfile_index_from_fanout_index(&mut self, fanout_index: usize) -> Option<u64>;
     fn walk_all_oids_from<F>(&mut self, start_byte: Option<u8>, cb: F)
         where F: FnMut(Oid) -> bool;
+
+    fn get_partial_matches_with_locations<F, P>(&mut self, start_byte: Option<u8>, partial: P, cb: &mut F)
+        where F: FnMut(Oid, FoundObjectLocation) -> bool,
+              P: DoesMatch;
+
     fn id(&self) -> OidFull;
 }
 
@@ -103,6 +114,34 @@ impl IDXState for IDXFileLight {
         where F: FnMut(Oid) -> bool
     {
         IDXFileLight::walk_all_oids_from(self, start_byte, cb)
+    }
+
+    fn get_partial_matches_with_locations<F, P>(&mut self, start_byte: Option<u8>, partial: P, cb: &mut F)
+        where F: FnMut(Oid, FoundObjectLocation) -> bool,
+              P: DoesMatch
+    {
+        let partial_oid_first_byte = partial.get_first_byte();
+        self.walk_all_oids_with_index_and_from(start_byte, |oid, oid_index| {
+            let found_oid_first_byte = get_first_byte_of_oid(oid);
+            if partial.matches(oid) {
+                if let Some(i) = IDXFileLight::find_packfile_index_from_fanout_index(self, oid_index) {
+                    let object_starts_at = i;
+                    let location = FoundPackedLocation {
+                        id: self.id,
+                        object_starts_at,
+                        oid_index,
+                    };
+                    let stop_searching = cb(oid, FoundObjectLocation::FoundPacked(location));
+                    if stop_searching { return true; }
+                }
+                // TODO: what if its not found?
+            }
+            // if the oid first byte that we just found in the file
+            // is greater than the first byte of our
+            // partial oid, this means we can stop reading
+            // because the .idx file is sorted by oid.
+            found_oid_first_byte > partial_oid_first_byte
+        });
     }
 }
 
@@ -161,5 +200,15 @@ impl State for MinState {
 
     fn get_path_to_db_as_bytes(&self) -> (usize, [u8; MAX_PATH_TO_DB_LEN]) {
         (self.path_to_db_bytes_start, self.path_to_db_bytes)
+    }
+
+    fn get_idx_file_owned(&mut self, id: OidFull) -> io::Result<Self::Idx> {
+        // first form the "pack-{40hex}.idx" string array:
+        let hex_str = oid_full_to_string_no_alloc(id);
+        let (take_to, str_arr) = self.get_idx_file_str_array_from_hash(&hex_str);
+        let idx_path = std::str::from_utf8(&str_arr[0..take_to])
+            .map_err(|_| ioerr!("Failed to load idx file from id: {:32x?}", hex_str))?;
+        let file = open_idx_file_light(idx_path)?;
+        Ok(file)
     }
 }
