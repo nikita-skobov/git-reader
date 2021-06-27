@@ -12,7 +12,7 @@ pub const BLOB: &'static str = "blob";
 pub const TAG: &'static str = "tag";
 
 pub fn resolve_to_base_type(
-    idxfile: &IDXFileLight,
+    idxfile: &mut IDXFileLight,
     packfile: &PackFile,
     base_oid: Oid,
 ) -> io::Result<&'static str> {
@@ -61,7 +61,7 @@ pub fn realmain() -> io::Result<()> {
     let idxfile_path = packfile_path.with_extension("idx");
 
     let packfile = open_pack_file_ex(&packfile_path)?;
-    let idxfile = open_idx_file_light(&idxfile_path)?;
+    let mut idxfile = open_idx_file_light(&idxfile_path)?;
     // first, get the idx entry map.
     // we want to traverse the packed objects in order
     // they appear in the packfile, but in the idx file
@@ -122,7 +122,7 @@ pub fn realmain() -> io::Result<()> {
             }
             object_database::packed::PackFileObjectType::RefDelta(base_oid) => {
                 let base_oid = full_oid_to_u128_oid(base_oid);
-                let base_type_str = resolve_to_base_type(&idxfile, &packfile, base_oid)?;
+                let base_type_str = resolve_to_base_type(&mut idxfile, &packfile, base_oid)?;
                 (base_type_str, Some(base_oid))
             }
         };

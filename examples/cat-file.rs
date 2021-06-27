@@ -1,17 +1,18 @@
 use std::{path::PathBuf, io, collections::{BTreeMap, BTreeSet}, time::Instant};
 use git_walker::{ioerr, object_id::{hex_u128_to_str, PartialOid, hash_str_to_oid, Oid}};
-use git_walker::{printoid, object_database::{LightObjectDB, FoundObjectLocation, loose::{commit_object_parsing::CommitFull, ParsedObject, UnparsedObject, ParseEverythingBlobStringsLossy}}, eprintoid, ioerre};
+use git_walker::{printoid, object_database::{LightObjectDB, FoundObjectLocation, loose::{commit_object_parsing::CommitFull, ParsedObject, UnparsedObject, ParseEverythingBlobStringsLossy}, state::{State, MinState}}, eprintoid, ioerre};
 
 /// Like git-cat-file, but it defaults to "-p", ie: it just
 /// prints the contents of the object found via its OID.
 
-pub fn disambiguate(
+pub fn disambiguate<S: State>(
     ambiguous_oid: &String,
     odb: &LightObjectDB,
+    state: &mut S,
 ) -> io::Result<(Oid, FoundObjectLocation)> {
     let partial_oid =  PartialOid::from_hash(ambiguous_oid)?;
     let mut found_set = BTreeMap::new();
-    odb.find_matching_oids_with_locations(partial_oid, |oid, location| {
+    odb.find_matching_oids_with_locations(partial_oid, state, |oid, location| {
         found_set.insert(oid, location);
     })?;
 
@@ -42,13 +43,14 @@ pub fn realmain() -> io::Result<()> {
     let ambiguous_oid = args.get(2)
         .ok_or_else(|| ioerr!("Must provide an OID to search"))?;
 
+    let mut state = MinState::new(path)?;
     // let now = Instant::now();
     let odb = LightObjectDB::new(&path)?;
     let (oid, location) = if ambiguous_oid.len() < 32 {
         // if its not a full oid, we need
         // to disambiguate, so traverse everything,
         // and find all matches:
-        let (oid, location) = disambiguate(ambiguous_oid, &odb)?;
+        let (oid, location) = disambiguate(ambiguous_oid, &odb, &mut state)?;
         (oid, Some(location))
     } else {
         // if its already 32 hex chars or longer,
@@ -62,12 +64,12 @@ pub fn realmain() -> io::Result<()> {
         Some(l) => l,
         None => {
             // find where the resolved oid is:
-            let (_, l) = odb.find_first_matching_oid_with_location(oid)?;
+            let (_, l) = odb.find_first_matching_oid_with_location(oid, &mut state)?;
             l
         }
     };
 
-    let object: ParsedObject<ParseEverythingBlobStringsLossy> = odb.get_object_from_location(location)?;
+    let object: ParsedObject<ParseEverythingBlobStringsLossy> = odb.get_object_from_location(location, &mut state)?;
     // let object: UnparsedObject = odb.get_object_from_location(location)?;
     println!("{}", object);
     // println!("Elapsed: {}us", now.elapsed().as_micros());
