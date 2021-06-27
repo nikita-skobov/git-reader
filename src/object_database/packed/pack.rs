@@ -286,12 +286,10 @@ impl PackFile {
         // let mut out_vec = vec![0; decompressed_size];
         let mut out_vec = tiny_vec!([u8; UNPARSED_PAYLOAD_STATIC_SIZE]);
         out_vec.resize(decompressed_size, 0);
-        // we expect a git object to contain a zlib header
-        let will_contain_zlib_header = true;
-        let mut decompressor = Decompress::new(will_contain_zlib_header);
         // TODO: need to care about this decompressed state?
         // is it possible that we don't read into the entire
         // out vec in one go?
+        decompressor.reset(true);
         let _decompressed_state = decompressor.decompress(
             compressed_data, &mut out_vec, FlushDecompress::None)?;
         let num_bytes_out = decompressor.total_out() as usize;

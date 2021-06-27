@@ -190,16 +190,17 @@ impl<'a> LightObjectDB<'a> {
         self.get_static_path_str(&out)
     }
 
-    pub fn get_loose_object<F, P: AsRef<Path>>(
+    pub fn get_loose_object<F, S, P: AsRef<Path>>(
         &self,
         loose_obj_path: P,
+        state: &mut S,
     ) -> io::Result<F>
         where F: TryFrom<UnparsedObject>,
               F::Error: ToString,
+              S: State,
     {
-        // TODO: dont make this every time
-        let mut decompressor = Decompress::new(true);
-        let resolved_obj = read_raw_object(loose_obj_path, false, &mut decompressor)?;
+        let decompressor = state.get_decompressor();
+        let resolved_obj = read_raw_object(loose_obj_path, false, decompressor)?;
         let transformed = F::try_from(resolved_obj)
             .map_err(|e| ioerr!("Failed to get loose object\n{}", e.to_string()))?;
         Ok(transformed)
@@ -283,9 +284,8 @@ impl<'a> LightObjectDB<'a> {
         let base_object_type = unparsed_object.object_type;
 
         // next we load our data:
-        // TODO: dont make this every time:
-        let mut decompressor = Decompress::new(true);
-        let this_object_data = pack.get_decompressed_data_from_index(obj_size, obj_starts_at, &mut decompressor)?;
+        let decompressor = state.get_decompressor();
+        let this_object_data = pack.get_decompressed_data_from_index(obj_size, obj_starts_at, decompressor)?;
 
         // for our data, we need to extract the length:
         let (_base_size, num_read) = find_encoded_length(&this_object_data)
@@ -345,7 +345,7 @@ impl<'a> LightObjectDB<'a> {
     {
         match location {
             FoundObjectLocation::FoundLoose(path) => {
-                self.get_loose_object(&path)
+                self.get_loose_object(&path, state)
             }
             FoundObjectLocation::FoundPacked(info) => {
                 self.get_packed_object(&info, state)
