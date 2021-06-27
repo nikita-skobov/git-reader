@@ -309,6 +309,7 @@ impl PackFile {
         decompressed_size: usize,
         starts_at: usize,
         object_type: PackFileObjectType,
+        decompressor: &mut Decompress,
     ) -> io::Result<UnparsedObject> {
         let (unparsed_object, this_object_data) = match object_type {
             PackFileObjectType::OfsDelta(base_starts_at) => {
@@ -319,10 +320,9 @@ impl PackFile {
                 ) = self.get_object_type_and_len_at_index(base_starts_at)?;
                 let next_obj_size: usize = next_obj_size.try_into()
                     .map_err(|_| ioerr!("Failed to convert {} into a usize. Either we failed at parsing this value, or your architecture does not support numbers this large", next_obj_size))?;
-                let base_raw_data = self.resolve_unparsed_object(next_obj_size, next_obj_index, next_obj_type)?;
-                // TODO: dont make this every iteration
-                let mut decompressor = Decompress::new(true);
-                let our_data = self.get_decompressed_data_from_index(decompressed_size, starts_at, &mut decompressor)?;
+                decompressor.reset(true);
+                let base_raw_data = self.resolve_unparsed_object(next_obj_size, next_obj_index, next_obj_type, decompressor)?;
+                let our_data = self.get_decompressed_data_from_index(decompressed_size, starts_at, decompressor)?;
                 (base_raw_data, our_data)
             }
 
@@ -340,9 +340,8 @@ impl PackFile {
             PackFileObjectType::Tree |
             PackFileObjectType::Blob |
             PackFileObjectType::Tag => {
-                // TODO: dont make this every iteration...
-                let mut decompressor = Decompress::new(true);
-                let data = self.get_decompressed_data_from_index(decompressed_size, starts_at, &mut decompressor)?;
+                decompressor.reset(true);
+                let data = self.get_decompressed_data_from_index(decompressed_size, starts_at, decompressor)?;
                 // safe to unwrap because we know we are only passing a
                 // simple type that can be converted:
                 let unparsed_type = object_type.into_unparsed_type().unwrap();

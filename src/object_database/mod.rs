@@ -200,6 +200,7 @@ impl<'a> LightObjectDB<'a> {
               S: State,
     {
         let decompressor = state.get_decompressor();
+        decompressor.reset(true);
         let resolved_obj = read_raw_object(loose_obj_path, false, decompressor)?;
         let transformed = F::try_from(resolved_obj)
             .map_err(|e| ioerr!("Failed to get loose object\n{}", e.to_string()))?;
@@ -264,7 +265,8 @@ impl<'a> LightObjectDB<'a> {
         let ref_id = match obj_type {
             PackFileObjectType::RefDelta(i) => i,
             _ => {
-                let unparsed = pack.resolve_unparsed_object(obj_size, obj_starts_at, obj_type)?;
+                let decompressor = state.get_decompressor();
+                let unparsed = pack.resolve_unparsed_object(obj_size, obj_starts_at, obj_type, decompressor)?;
                 let transformed = F::try_from(unparsed)
                     .map_err(|e| ioerr!("Failed to get packed object\n{}", e.to_string()))?;
                 return Ok(transformed);
@@ -285,6 +287,7 @@ impl<'a> LightObjectDB<'a> {
 
         // next we load our data:
         let decompressor = state.get_decompressor();
+        decompressor.reset(true);
         let this_object_data = pack.get_decompressed_data_from_index(obj_size, obj_starts_at, decompressor)?;
 
         // for our data, we need to extract the length:
