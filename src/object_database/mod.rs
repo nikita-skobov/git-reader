@@ -378,33 +378,16 @@ impl<'a> LightObjectDB<'a> {
         where F: FnMut(Oid),
               S: State,
     {
-        let first_byte = get_first_byte_of_oid(partial_oid.oid) as usize;
-        let hex_first_byte: [u8; 2] = HEX_BYTES[first_byte];
-        let (big_str_array, take_index) = self.get_static_path_str(&hex_first_byte);
-        let search_path_str = std::str::from_utf8(&big_str_array[0..take_index])
-            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
-        
-        // we know all of these HEX_BYTES are valid utf-8 sequences
-        // so we can unwrap:
-        let hex_str = std::str::from_utf8(&hex_first_byte).unwrap();
-        let _ = fs_helpers::search_folder(&search_path_str, |entry| -> Option<()> {
-            let entryname = entry.file_name();
-            let filename = match entryname.to_str() {
-                Some(s) => s,
-                None => return None,
-            };
-            let oid = match hash_object_file_and_folder(hex_str, &filename) {
-                Ok(o) => o,
-                Err(_) => { return None; }
-            };
-            if partial_oid.matches(oid) {
-                cb(oid);
+        let first_byte = partial_oid.get_first_byte();
+        state.iter_loose_folder(first_byte, &mut |found_oid, _folder_path, _filename| {
+            if partial_oid.matches(found_oid) {
+                cb(found_oid);
             }
-            // TODO: otherwise if we failed to get str, should
-            // we treat that as an error?
-            None
-        });
-        Ok(())
+            // we only return true if the user's callback is true.
+            // otherwise we return false to indicate that we
+            // want to keep searching
+            false
+        })
     }
 
     /// like `find_matching_oids_loose` but in this callback,
@@ -420,38 +403,21 @@ impl<'a> LightObjectDB<'a> {
               M: DoesMatch,
               S: State,
     {
-        let first_byte = partial_oid.get_first_byte() as usize;
-        let hex_first_byte: [u8; 2] = HEX_BYTES[first_byte];
-        let (big_str_array, take_index) = self.get_static_path_str(&hex_first_byte);
-        let search_path_str = std::str::from_utf8(&big_str_array[0..take_index])
-            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
-        
-        // we know all of these HEX_BYTES are valid utf-8 sequences
-        // so we can unwrap:
-        let hex_str = std::str::from_utf8(&hex_first_byte).unwrap();
-        let mut stop_searching = false;
-        let _ = fs_helpers::search_folder(&search_path_str, |entry| -> Option<()> {
-            if stop_searching { return None; }
-            let entryname = entry.file_name();
-            let filename = match entryname.to_str() {
-                Some(s) => s,
-                None => return None,
-            };
-            let oid = match hash_object_file_and_folder(hex_str, &filename) {
-                Ok(o) => o,
-                Err(_) => { return None; }
-            };
-            if partial_oid.matches(oid) {
+        let first_byte = partial_oid.get_first_byte();
+        state.iter_loose_folder(first_byte, &mut |found_oid, folder_path, filename| {
+            if partial_oid.matches(found_oid) {
                 // if we found a match, lets construct
                 // a pathbuf from our current search folder,
                 // and the filename of what we found:
-                let mut full_pathbuf = PathBuf::from(search_path_str);
+                let mut full_pathbuf = PathBuf::from(folder_path);
                 full_pathbuf.push(filename);
-                stop_searching = cb(oid, FoundObjectLocation::FoundLoose(full_pathbuf));
+                return cb(found_oid, FoundObjectLocation::FoundLoose(full_pathbuf));
             }
-            None
-        });
-        Ok(())
+            // we only return true if the user's callback is true.
+            // otherwise we return false to indicate that we
+            // want to keep searching
+            false
+        })
     }
 
     pub fn read_idx_file(

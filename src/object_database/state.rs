@@ -1,6 +1,6 @@
 
 use flate2::Decompress;
-use crate::{ioerr, object_id::{Oid, OidFull, oid_full_to_string_no_alloc, get_first_byte_of_oid}, ioerre};
+use crate::{ioerr, object_id::{Oid, OidFull, oid_full_to_string_no_alloc, get_first_byte_of_oid, HEX_BYTES, hash_object_file_and_folder}, ioerre, fs_helpers};
 use std::io;
 use super::{main_sep_byte, MAX_PATH_TO_DB_LEN, packed::{open_idx_file_light, IDXFileLight}, DoesMatch, FoundPackedLocation, FoundObjectLocation};
 
@@ -31,6 +31,9 @@ pub trait State {
 
     fn get_decompressor(&mut self) -> &mut Decompress;
     fn get_idx_file(&mut self, id: OidFull) -> io::Result<OwnedOrBorrowedMut<Self::Idx>>;
+
+    fn iter_loose_folder<F>(&mut self, folder_byte: u8, cb: &mut F) -> io::Result<()>
+        where F: FnMut(Oid, &str, &str) -> bool;
 
     /// this is necessary in order to prevent re-allocating pathbufs each time we
     /// wish to read a file. Instead, we can create a stack allocated array
@@ -194,5 +197,34 @@ impl State for MinState {
 
     fn get_path_to_db_as_bytes(&self) -> (usize, [u8; MAX_PATH_TO_DB_LEN]) {
         (self.path_to_db_bytes_start, self.path_to_db_bytes)
+    }
+
+    fn iter_loose_folder<F>(&mut self, folder_byte: u8, cb: &mut F) -> io::Result<()>
+        where F: FnMut(Oid, &str, &str) -> bool
+    {
+        let first_byte = folder_byte as usize;
+        let hex_first_byte: [u8; 2] = HEX_BYTES[first_byte];
+        let (take_index, big_str_array) = self.get_static_path_str(&hex_first_byte);
+        let search_path_str = std::str::from_utf8(&big_str_array[0..take_index])
+            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
+        
+        // we know all of these HEX_BYTES are valid utf-8 sequences
+        // so we can unwrap:
+        let hex_str = std::str::from_utf8(&hex_first_byte).unwrap();
+        let mut stop_searching = false;
+        fs_helpers::search_folder_out(&search_path_str, |entry| {
+            if stop_searching { return Ok(()); }
+            let entryname = entry.file_name();
+            let filename = match entryname.to_str() {
+                Some(s) => s,
+                None => return Ok(()),
+            };
+            let oid = match hash_object_file_and_folder(hex_str, &filename) {
+                Ok(o) => o,
+                Err(_) => { return Ok(()); }
+            };
+            stop_searching = cb(oid, search_path_str, filename);
+            Ok(())
+        })
     }
 }
