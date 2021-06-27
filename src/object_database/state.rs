@@ -81,6 +81,8 @@ pub trait State {
 pub trait IDXState {
     fn find_oid_and_fanout_index(&mut self, oid: Oid) -> io::Result<usize>;
     fn find_packfile_index_from_fanout_index(&mut self, fanout_index: usize) -> Option<u64>;
+    fn walk_all_oids_from<F>(&mut self, start_byte: Option<u8>, cb: F)
+        where F: FnMut(Oid) -> bool;
     fn id(&self) -> OidFull;
 }
 
@@ -95,6 +97,12 @@ impl IDXState for IDXFileLight {
 
     fn id(&self) -> OidFull {
         self.id
+    }
+
+    fn walk_all_oids_from<F>(&mut self, start_byte: Option<u8>, cb: F)
+        where F: FnMut(Oid) -> bool
+    {
+        IDXFileLight::walk_all_oids_from(self, start_byte, cb)
     }
 }
 

@@ -369,12 +369,14 @@ impl<'a> LightObjectDB<'a> {
         self.get_object_from_location(location, state)
     }
 
-    pub fn find_matching_oids_loose<F>(
+    pub fn find_matching_oids_loose<F, S>(
         &self,
         partial_oid: PartialOid,
+        state: &mut S,
         cb: &mut F,
     ) -> io::Result<()>
-        where F: FnMut(Oid)
+        where F: FnMut(Oid),
+              S: State,
     {
         let first_byte = get_first_byte_of_oid(partial_oid.oid) as usize;
         let hex_first_byte: [u8; 2] = HEX_BYTES[first_byte];
@@ -467,12 +469,14 @@ impl<'a> LightObjectDB<'a> {
         Ok(idx_file)
     }
 
-    pub fn find_matching_oids_packed<F>(
+    pub fn find_matching_oids_packed<F, S>(
         &self,
         partial_oid: PartialOid,
+        state: &mut S,
         cb: &mut F,
     ) -> io::Result<()>
-        where F: FnMut(Oid)
+        where F: FnMut(Oid),
+              S: State,
     {
         // first we load every .idx file we find in the database/packs
         // directory
@@ -491,8 +495,10 @@ impl<'a> LightObjectDB<'a> {
             if ! filename.ends_with(".idx") {
                 return None;
             }
-            let idx_file = match self.read_idx_file(filename) {
-                Ok(f) => f,
+            let idx_id = parse_pack_or_idx_id(filename)?;
+            let mut idx_file = state.get_idx_file(idx_id);
+            let idx_file = match idx_file {
+                Ok(ref mut f) => f.as_mut(),
                 // TODO: should we stop all iteration
                 // if a single idx file failed to read?
                 // I think not? so here I just return None
@@ -583,16 +589,18 @@ impl<'a> LightObjectDB<'a> {
         Ok(())
     }
 
-    pub fn find_matching_oids<F>(
+    pub fn find_matching_oids<F, S>(
         &self,
         partial_oid: PartialOid,
+        state: &mut S,
         cb: F,
     ) -> io::Result<()>
-        where F: FnMut(Oid)
+        where F: FnMut(Oid),
+              S: State,
     {
         let mut cb = cb;
-        self.find_matching_oids_loose(partial_oid, &mut cb)?;
-        self.find_matching_oids_packed(partial_oid, &mut cb)?;
+        self.find_matching_oids_loose(partial_oid, state, &mut cb)?;
+        self.find_matching_oids_packed(partial_oid, state, &mut cb)?;
 
         Ok(())
     }
