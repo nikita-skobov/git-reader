@@ -7,7 +7,9 @@ use loose::*;
 pub mod packed;
 use packed::*;
 use flate2::Decompress;
+use state::{State, IDXState};
 
+pub mod state;
 pub mod light_state;
 
 
@@ -207,15 +209,19 @@ impl<'a> LightObjectDB<'a> {
     /// resolve an Oid given the idx file it should* be in,
     /// and once resolved, load it from the associated pack file.
     /// It is an error if the oid does not exist in this idx file.
-    pub fn get_packed_object_from_oid<F>(
+    pub fn get_packed_object_from_oid<F, S>(
         &self,
         oid: Oid,
-        idx_file: &IDXFileLight,
         pack_file: &PackFile,
+        idx_id: OidFull,
+        state: &mut S,
     ) -> io::Result<UnparsedObject>
         where F: TryFrom<UnparsedObject>,
               F::Error: ToString,
+              S: State,
     {
+        let mut idx_file = state.get_idx_file(idx_id)?;
+        let idx_file = idx_file.as_mut();
         // this is the fanout index we use to find the
         // actual packfile index:
         let oid_index = idx_file.find_oid_and_fanout_index(oid)?;
@@ -223,22 +229,24 @@ impl<'a> LightObjectDB<'a> {
             .ok_or_else(|| ioerr!("Found oid index, but failed to find packfile index offset for {:032x}", oid))?;
         let object_starts_at = pack_index;
         let location_info = FoundPackedLocation {
-            id: idx_file.id,
+            id: idx_file.id(),
             object_starts_at,
             oid_index,
         };
-        self.get_packed_object_packfile_loaded(&location_info, pack_file)
+        self.get_packed_object_packfile_loaded(&location_info, pack_file, state)
     }
 
     /// Like `get_packed_object` but takes a pack file that has
     /// already been loaded
-    pub fn get_packed_object_packfile_loaded<F>(
+    pub fn get_packed_object_packfile_loaded<F, S>(
         &self,
         packed_info: &FoundPackedLocation,
-        pack: &PackFile
+        pack: &PackFile,
+        state: &mut S,
     ) -> io::Result<F>
         where F: TryFrom<UnparsedObject>,
               F::Error: ToString,
+              S: State,
     {
         let obj_index: usize = packed_info.object_starts_at.try_into()
             .map_err(|_| ioerr!("Failed to convert u64 into usize in order to index the packfile. Your architecture might not allow {} to be represented as a usize.", packed_info.object_starts_at))?;
@@ -262,18 +270,14 @@ impl<'a> LightObjectDB<'a> {
             }
         };
 
-        // if its a ref delta, we need to load the .idx file
-        // to get the index of where its ref base object starts,
-        // and then try again.
-        let (idx_str_array, take_to) = self.get_idx_file_str_array(packed_info.id);
-        let idx_path_str = std::str::from_utf8(&idx_str_array[0..take_to])
-            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
-        let idx_file = open_idx_file_light(idx_path_str)?;
+        // if its a ref delta, we need to get information
+        // from the .idx file to get the index of
+        // where its ref base object starts, and then try again.
         let base_oid = full_oid_to_u128_oid(ref_id);
         // we want the unparsed data, so we make sure
         // to specify that:
-        let unparsed_object = self.get_packed_object_from_oid::<UnparsedObject>(
-            base_oid, &idx_file, &pack)?;
+        let unparsed_object = self.get_packed_object_from_oid::<UnparsedObject, S>(
+            base_oid, &pack, packed_info.id, state)?;
         // now that we have resolved the base object, we load our object:
         let base_object_data = unparsed_object.payload;
         let base_object_type = unparsed_object.object_type;
@@ -301,12 +305,14 @@ impl<'a> LightObjectDB<'a> {
         Ok(transformed)
     }
 
-    pub fn get_packed_object<F>(
+    pub fn get_packed_object<F, S>(
         &self,
         packed_info: &FoundPackedLocation,
+        state: &mut S,
     ) -> io::Result<F>
         where F: TryFrom<UnparsedObject>,
               F::Error: ToString,
+              S: State,
     {
         // we need to first construct the path of this pack file:
         let (
@@ -318,7 +324,7 @@ impl<'a> LightObjectDB<'a> {
 
         // now read that file:
         let pack = open_pack_file(search_path_str, packed_info.id)?;
-        self.get_packed_object_packfile_loaded(packed_info, &pack)
+        self.get_packed_object_packfile_loaded(packed_info, &pack, state)
     }
 
     /// Get an object from its found location.
@@ -328,32 +334,36 @@ impl<'a> LightObjectDB<'a> {
     /// specify your generic as `UnparsedObject`, otherwise,
     /// you can specify one of the parsed objects that implements
     /// `UnparsedObject`
-    pub fn get_object_from_location<F>(
+    pub fn get_object_from_location<F, S>(
         &self,
-        location: FoundObjectLocation
+        location: FoundObjectLocation,
+        state: &mut S,
     ) -> io::Result<F>
         where F: TryFrom<UnparsedObject>,
               F::Error: ToString,
+              S: State,
     {
         match location {
             FoundObjectLocation::FoundLoose(path) => {
                 self.get_loose_object(&path)
             }
             FoundObjectLocation::FoundPacked(info) => {
-                self.get_packed_object(&info)
+                self.get_packed_object(&info, state)
             }
         }
     }
 
-    pub fn get_object_by_oid<F>(
+    pub fn get_object_by_oid<F, S>(
         &self,
         oid: Oid,
+        state: &mut S,
     ) -> io::Result<F>
         where F: TryFrom<UnparsedObject>,
               F::Error: ToString,
+              S: State,
     {
         let (_, location) = self.find_first_matching_oid_with_location(oid)?;
-        self.get_object_from_location(location)
+        self.get_object_from_location(location, state)
     }
 
     pub fn find_matching_oids_loose<F>(
