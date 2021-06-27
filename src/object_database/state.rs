@@ -2,7 +2,7 @@
 use flate2::Decompress;
 use crate::{ioerr, object_id::{Oid, OidFull, oid_full_to_string_no_alloc, get_first_byte_of_oid, HEX_BYTES, hash_object_file_and_folder, hash_object_file_and_folder_full}, ioerre, fs_helpers};
 use std::{collections::BTreeMap, io};
-use super::{main_sep_byte, MAX_PATH_TO_DB_LEN, packed::{open_idx_file_light, IDXFileLight, parse_pack_or_idx_id}, DoesMatch, FoundPackedLocation, FoundObjectLocation, light_state::default_loose_map};
+use super::{main_sep_byte, MAX_PATH_TO_DB_LEN, packed::{open_idx_file_light, IDXFileLight, parse_pack_or_idx_id}, DoesMatch, FoundPackedLocation, FoundObjectLocation};
 use tinyvec::{tiny_vec, TinyVec};
 
 pub enum OwnedOrBorrowedMut<'a, T> {
@@ -283,7 +283,7 @@ impl State for MinState {
 
 pub struct SlightlyBetterState {
     pub fallback: MinState,
-    pub loose_map: [BTreeMap<Oid, OidFull>; 256],
+    pub loose_map: [Option<BTreeMap<Oid, OidFull>>; 256],
     pub known_packs: TinyVec<[OidFull; 64]>,
 }
 
@@ -302,7 +302,15 @@ impl SlightlyBetterState {
     {
         // otherwise we do, so lets iterate over it and return all partial
         // matches:
-        for (oid, oid_full) in self.loose_map[folder_byte].iter() {
+        let opt = &self.loose_map[folder_byte];
+        let map = match opt {
+            Some(m) => m,
+            // probably wont ever happen:
+            None => {
+                return Ok(());
+            }
+        };
+        for (oid, oid_full) in map.iter() {
             // TODO: optimization here.. we don't know if
             // the user wants this oid or not, but yet we are
             // spending time creating a string for it!.
@@ -360,7 +368,7 @@ impl State for SlightlyBetterState {
         // in our loose map, use that instead of
         // reading the files again:
         let folder_usize = folder_byte as usize;
-        if ! self.loose_map[folder_usize].is_empty() {
+        if self.loose_map[folder_usize].is_some() {
             return self.iter_loose_folder_from_map(folder_usize, cb);
         }
 
@@ -400,7 +408,7 @@ impl State for SlightlyBetterState {
             // we always say false: ie: always finish iteration
             false
         });
-        self.loose_map[folder_usize] = map;
+        self.loose_map[folder_usize] = Some(map);
         res
     }
 
@@ -456,4 +464,75 @@ impl State for SlightlyBetterState {
     fn get_path_to_db_as_bytes(&self) -> (usize, [u8; MAX_PATH_TO_DB_LEN]) {
         self.fallback.get_path_to_db_as_bytes()
     }
+}
+
+
+
+pub fn default_loose_map() -> [Option<BTreeMap<Oid, OidFull>>; 256] {
+    [
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+        None, None, None, None,
+    ]
 }
