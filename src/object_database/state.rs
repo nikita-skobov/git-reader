@@ -1,7 +1,7 @@
 
 use flate2::Decompress;
 use crate::{ioerr, object_id::{Oid, OidFull, oid_full_to_string_no_alloc, get_first_byte_of_oid, HEX_BYTES, hash_object_file_and_folder, hash_object_file_and_folder_full}, ioerre, fs_helpers};
-use std::{collections::BTreeMap, io};
+use std::{collections::{HashMap, BTreeMap}, io};
 use super::{main_sep_byte, MAX_PATH_TO_DB_LEN, packed::{open_idx_file_light, IDXFileLight, parse_pack_or_idx_id}, DoesMatch, FoundPackedLocation, FoundObjectLocation};
 use tinyvec::{tiny_vec, TinyVec};
 
@@ -114,6 +114,74 @@ pub trait IDXState {
               P: DoesMatch;
 
     fn id(&self) -> OidFull;
+}
+
+pub struct IDXMapped {
+    pub fanout_map: TinyVec<[Oid; 512]>,
+    pub map: BTreeMap<Oid, (usize, u64)>,
+    pub id: OidFull,
+}
+
+impl IDXState for IDXMapped {
+    fn find_oid_and_fanout_index(&mut self, oid: Oid) -> io::Result<usize> {
+        match self.map.get(&oid) {
+            Some((fanout_index, _packfile_offset)) => Ok(*fanout_index),
+            None => {
+                return ioerre!("Failed to find oid {:032x} in idx mapped", oid);
+            }
+        }
+    }
+
+    fn find_packfile_index_from_fanout_index(&mut self, fanout_index: usize) -> Option<u64> {
+        match self.fanout_map.get(fanout_index) {
+            None => None,
+            Some(oid_at_index) => match self.map.get(oid_at_index) {
+                Some((_fanout_index, packfile_offset)) => Some(*packfile_offset),
+                None => None,
+            }
+        }
+    }
+
+    fn walk_all_oids_from<F>(&mut self, start_byte: Option<u8>, cb: F)
+        where F: FnMut(Oid) -> bool
+    {
+        let mut cb = cb;
+        let start_at = start_byte.unwrap_or(0);
+        for (oid, _) in self.map.iter() {
+            let first_oid_byte = get_first_byte_of_oid(*oid);
+            if first_oid_byte >= start_at {
+                let stop_calling = cb(*oid);
+                if stop_calling {
+                    return;
+                }
+            }
+        }
+    }
+
+    fn get_partial_matches_with_locations<F, P>(&mut self, start_byte: Option<u8>, partial: P, cb: &mut F)
+        where F: FnMut(Oid, FoundObjectLocation) -> bool,
+              P: DoesMatch
+    {
+        let start_at = start_byte.unwrap_or(0);
+        for (oid, (fanout_index, packfile_offset)) in self.map.iter() {
+            let first_oid_byte = get_first_byte_of_oid(*oid);
+            if first_oid_byte >= start_at {
+                if partial.matches(*oid) {
+                    let location = FoundPackedLocation {
+                        id: self.id(),
+                        object_starts_at: *packfile_offset,
+                        oid_index: *fanout_index,
+                    };
+                    let stop_searching = cb(*oid, FoundObjectLocation::FoundPacked(location));
+                    if stop_searching { return; }
+                }
+            }
+        }
+    }
+
+    fn id(&self) -> OidFull {
+        self.id
+    }
 }
 
 impl IDXState for IDXFileLight {
@@ -285,6 +353,9 @@ pub struct SlightlyBetterState {
     pub fallback: MinState,
     pub loose_map: [Option<BTreeMap<Oid, OidFull>>; 256],
     pub known_packs: TinyVec<[OidFull; 64]>,
+
+    pub idx_file_map: HashMap<OidFull, usize>,
+    pub idx_files: Vec<IDXMapped>,
 }
 
 impl SlightlyBetterState {
@@ -294,6 +365,8 @@ impl SlightlyBetterState {
             fallback: min,
             loose_map: default_loose_map(),
             known_packs: tiny_vec!(),
+            idx_files: vec![],
+            idx_file_map: HashMap::new(),
         })
     }
 
@@ -348,17 +421,88 @@ impl SlightlyBetterState {
         }
         Ok(())
     }
+
+    pub fn walk_all_oids_from_idx_with_full_info<F>(idx_file: &IDXFileLight, cb: &mut F) -> io::Result<()>
+        where F: FnMut(Oid, usize, u64)
+    {
+        let mut last_error = Ok(());
+        let mut stop_calling = false;
+        idx_file.walk_all_oids_with_index_and_from(None, |oid, fanout_index| {
+            if stop_calling { return true; }
+            let packfile_offset = idx_file.find_packfile_index_from_fanout_index(fanout_index);
+            let packfile_offset = if let Some(p) = packfile_offset {
+                p
+            } else {
+                stop_calling = true;
+                last_error = ioerre!("Failed to find a packfile offset for oid: {:032x}", oid);
+                return stop_calling
+            };
+            cb(oid, fanout_index, packfile_offset);
+            // we want to parse ALL of the oids/indices
+            // so we always pass false. if we pass
+            // true then we return early.
+            stop_calling
+        });
+
+        last_error
+    }
+
+    // pub fn try_get_idx_file_from_map(&mut self, id: OidFull) -> bool {}
 }
 
 impl State for SlightlyBetterState {
-    type Idx = IDXFileLight;
+    type Idx = IDXMapped;
 
     fn get_decompressor(&mut self) -> &mut Decompress {
         &mut self.fallback.decompressor
     }
 
-    fn get_idx_file(&mut self, id: OidFull) -> io::Result<OwnedOrBorrowedMut<Self::Idx>> {
-        self.fallback.get_idx_file(id)
+    /// since we want to keep track of the idx files we read, we do the following:
+    /// we first check if we have loaded this idx file before.
+    /// if so, we just return what we have loaded.
+    /// otherwise, we load it from scratch, and fully parse it
+    /// into a IDXMapped object, and then return a reference to our
+    /// IDXMapped object that we now own.
+    fn get_idx_file<'a>(&'a mut self, id: OidFull) -> io::Result<OwnedOrBorrowedMut<'a, Self::Idx>> {
+        match self.idx_file_map.get(&id) {
+            Some(index) => {
+                let borrowed = &mut self.idx_files[*index];
+                let oid = oid_full_to_string_no_alloc(id);
+                let oidstr = unsafe { std::str::from_utf8_unchecked(&oid) };
+                // eprintln!("Returning an idx file we already know: {}", oidstr);
+                let borrowed = OwnedOrBorrowedMut::BorrowedMut(borrowed);
+                return Ok(borrowed);
+            }
+            None => {}
+        }
+
+        // otherwise we havent mapped that idx file yet, so
+        // lets read it entirely, store it in memory
+        // and then return it as borrowed
+        let oid = oid_full_to_string_no_alloc(id);
+        let oidstr = unsafe { std::str::from_utf8_unchecked(&oid) };
+        // eprintln!("Reading an idx file for first time: {}", oidstr);
+        let mut idx_file = self.fallback.get_idx_file(id)?;
+        let idx_file = idx_file.as_mut();
+        let mut map = IDXMapped {
+            fanout_map: tiny_vec!(),
+            map: BTreeMap::new(),
+            id: id,  
+        };
+        Self::walk_all_oids_from_idx_with_full_info(idx_file, &mut |oid, fanout_index, pack_offset| {
+            map.map.insert(oid, (fanout_index, pack_offset));
+            if map.fanout_map.len() <= fanout_index {
+                map.fanout_map.resize(fanout_index + 1, 0);
+            }
+            map.fanout_map[fanout_index] = oid;
+        })?;
+        let idx_file_index = self.idx_files.len();
+        self.idx_files.push(map);
+        self.idx_file_map.insert(id, idx_file_index);
+
+        let borrowed = &mut self.idx_files[idx_file_index];
+        let borrowed = OwnedOrBorrowedMut::BorrowedMut(borrowed);
+        Ok(borrowed)
     }
 
     fn iter_loose_folder<F>(&mut self, folder_byte: u8, cb: &mut F) -> io::Result<()>
