@@ -40,6 +40,38 @@ pub fn search_folder_out<P, F>(
     Ok(())
 }
 
+/// an alternative to `search_folder_out` where
+/// we treat the search folder as missing as being ok.
+/// this returns as soon as your callback returns an error.
+pub fn search_folder_out_missing_ok<P, F>(
+    path: P,
+    should_use_entry: F
+) -> io::Result<()> where
+    P: AsRef<Path>,
+    F: FnMut(&DirEntry) -> io::Result<()>
+{
+    let mut should_use_entry = should_use_entry;
+    let readdir_call = fs::read_dir(path);
+    let readdir = match readdir_call {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            match e.kind() {
+                io::ErrorKind::NotFound => {
+                    // if a folder is not found, thats ok
+                    return Ok(());
+                }
+                _ => Err(e),
+            }
+        }
+    };
+    for entry in readdir? {
+        let entry = entry?;
+        if let Err(e) = should_use_entry(&entry) {
+            return Err(e);
+        }
+    }
+    Ok(())
+}
 
 pub fn get_mmapped_file<P: AsRef<Path>>(
     path: P,

@@ -234,7 +234,7 @@ impl State for MinState {
         // so we can unwrap:
         let hex_str = std::str::from_utf8(&hex_first_byte).unwrap();
         let mut stop_searching = false;
-        fs_helpers::search_folder_out(&search_path_str, |entry| {
+        fs_helpers::search_folder_out_missing_ok(&search_path_str, |entry| {
             if stop_searching { return Ok(()); }
             let entryname = entry.file_name();
             let filename = match entryname.to_str() {
