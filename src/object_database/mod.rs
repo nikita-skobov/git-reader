@@ -555,8 +555,9 @@ impl<'a> LightObjectDB<'a> {
                 return None;
             }
             let idx_id = parse_pack_or_idx_id(filename)?;
-            let mut idx_file = match state.get_idx_file_owned(idx_id) {
-                Ok(f) => f,
+            let mut idx_file = state.get_idx_file(idx_id);
+            let idx_file = match idx_file {
+                Ok(ref mut f) => f.as_mut(),
                 // TODO: should we stop all iteration
                 // if a single idx file failed to read?
                 // I think not? so here I just return None

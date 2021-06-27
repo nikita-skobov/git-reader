@@ -31,12 +31,6 @@ pub trait State {
 
     fn get_decompressor(&mut self) -> &mut Decompress;
     fn get_idx_file(&mut self, id: OidFull) -> io::Result<OwnedOrBorrowedMut<Self::Idx>>;
-    /// like `get_idx_file` but guarantees that the result is owned.
-    /// as the caller, you MUST guarantee that you return this
-    /// idx file back when done with it. THe only reason
-    /// this call is necessary is because there are certain operations
-    /// where we need exclusive access to an owned idx file.
-    fn get_idx_file_owned(&mut self, id: OidFull) -> io::Result<Self::Idx>;
 
     /// this is necessary in order to prevent re-allocating pathbufs each time we
     /// wish to read a file. Instead, we can create a stack allocated array
@@ -200,15 +194,5 @@ impl State for MinState {
 
     fn get_path_to_db_as_bytes(&self) -> (usize, [u8; MAX_PATH_TO_DB_LEN]) {
         (self.path_to_db_bytes_start, self.path_to_db_bytes)
-    }
-
-    fn get_idx_file_owned(&mut self, id: OidFull) -> io::Result<Self::Idx> {
-        // first form the "pack-{40hex}.idx" string array:
-        let hex_str = oid_full_to_string_no_alloc(id);
-        let (take_to, str_arr) = self.get_idx_file_str_array_from_hash(&hex_str);
-        let idx_path = std::str::from_utf8(&str_arr[0..take_to])
-            .map_err(|_| ioerr!("Failed to load idx file from id: {:32x?}", hex_str))?;
-        let file = open_idx_file_light(idx_path)?;
-        Ok(file)
     }
 }
