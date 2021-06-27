@@ -2,7 +2,7 @@
 use flate2::Decompress;
 use crate::{ioerr, object_id::{Oid, OidFull, oid_full_to_string_no_alloc, get_first_byte_of_oid, HEX_BYTES, hash_object_file_and_folder}, ioerre, fs_helpers};
 use std::io;
-use super::{main_sep_byte, MAX_PATH_TO_DB_LEN, packed::{open_idx_file_light, IDXFileLight}, DoesMatch, FoundPackedLocation, FoundObjectLocation};
+use super::{main_sep_byte, MAX_PATH_TO_DB_LEN, packed::{open_idx_file_light, IDXFileLight, parse_pack_or_idx_id}, DoesMatch, FoundPackedLocation, FoundObjectLocation};
 
 pub enum OwnedOrBorrowedMut<'a, T> {
     Owned(T),
@@ -34,6 +34,9 @@ pub trait State {
 
     fn iter_loose_folder<F>(&mut self, folder_byte: u8, cb: &mut F) -> io::Result<()>
         where F: FnMut(Oid, &str, &str) -> bool;
+
+    fn iter_known_packs<F>(&mut self, cb: &mut F) -> io::Result<()>
+        where F: FnMut(&mut Self, OidFull) -> bool;
 
     /// this is necessary in order to prevent re-allocating pathbufs each time we
     /// wish to read a file. Instead, we can create a stack allocated array
@@ -224,6 +227,36 @@ impl State for MinState {
                 Err(_) => { return Ok(()); }
             };
             stop_searching = cb(oid, search_path_str, filename);
+            Ok(())
+        })
+    }
+
+    fn iter_known_packs<F>(&mut self, cb: &mut F) -> io::Result<()>
+        where F: FnMut(&mut Self, OidFull) -> bool
+    {
+        // first we load every .idx file we find in the database/packs
+        // directory
+        let packs_dir = b"pack";
+        let (take_index, big_str_array) = self.get_static_path_str(packs_dir);
+        let search_path_str = std::str::from_utf8(&big_str_array[0..take_index])
+            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
+        // println!("Searching {}", search_path_str);
+        let mut stop_searching = false;
+        fs_helpers::search_folder_out(&search_path_str, |entry| {
+            if stop_searching { return Ok(()); }
+            let filename = entry.file_name();
+            let filename = match filename.to_str() {
+                Some(s) => s,
+                None => return Ok(()),
+            };
+            if ! filename.ends_with(".idx") {
+                return Ok(());
+            }
+            let idx_id = match parse_pack_or_idx_id(filename) {
+                Some(i) => i,
+                None => return Ok(()),
+            };
+            stop_searching = cb(self, idx_id);
             Ok(())
         })
     }

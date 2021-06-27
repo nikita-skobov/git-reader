@@ -446,32 +446,16 @@ impl<'a> LightObjectDB<'a> {
         where F: FnMut(Oid),
               S: State,
     {
-        // first we load every .idx file we find in the database/packs
-        // directory
-        let partial_oid_first_byte = get_first_byte_of_oid(partial_oid.oid);
-        let packs_dir = b"pack";
-        let (big_str_array, take_index) = self.get_static_path_str(packs_dir);
-        let search_path_str = std::str::from_utf8(&big_str_array[0..take_index])
-            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
-        // println!("Searching {}", search_path_str);
-        fs_helpers::search_folder(&search_path_str, |entry| -> Option<()> {
-            let filename = entry.file_name();
-            let filename = match filename.to_str() {
-                Some(s) => s,
-                None => return None,
-            };
-            if ! filename.ends_with(".idx") {
-                return None;
-            }
-            let idx_id = parse_pack_or_idx_id(filename)?;
-            let mut idx_file = state.get_idx_file(idx_id);
+        let partial_oid_first_byte = partial_oid.get_first_byte();
+        state.iter_known_packs(&mut |state2, idx_id| {
+            let mut idx_file = state2.get_idx_file(idx_id);
             let idx_file = match idx_file {
                 Ok(ref mut f) => f.as_mut(),
                 // TODO: should we stop all iteration
                 // if a single idx file failed to read?
                 // I think not? so here I just return None
                 // and continue the iteration at the next idx filename
-                Err(_) => { return None },
+                Err(_) => { return false },
             };
             idx_file.walk_all_oids_from(Some(partial_oid_first_byte), |oid| {
                 let found_oid_first_byte = get_first_byte_of_oid(oid);
@@ -484,9 +468,10 @@ impl<'a> LightObjectDB<'a> {
                 // because the .idx file is sorted by oid.
                 found_oid_first_byte > partial_oid_first_byte
             });
-            None
-        })?;
-        Ok(())
+            // always return false because we want to check
+            // through all packs
+            false
+        })
     }
 
     /// The callback should return true if you want to stop
@@ -501,44 +486,24 @@ impl<'a> LightObjectDB<'a> {
               M: DoesMatch,
               S: State,
     {
-        // first we load every .idx file we find in the database/packs
-        // directory
         let partial_oid_first_byte = partial_oid.get_first_byte();
-        let packs_dir = b"pack";
-        let (big_str_array, take_index) = self.get_static_path_str(packs_dir);
-        let search_path_str = std::str::from_utf8(&big_str_array[0..take_index])
-            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
-        // println!("Searching {}", search_path_str);
         let mut stop_searching = false;
-        fs_helpers::search_folder(&search_path_str, |entry| -> Option<()> {
-            if stop_searching { return None; }
-            let filename = entry.file_name();
-            let filename = match filename.to_str() {
-                Some(s) => s,
-                None => return None,
-            };
-            if ! filename.ends_with(".idx") {
-                return None;
-            }
-            let idx_id = parse_pack_or_idx_id(filename)?;
-            let mut idx_file = state.get_idx_file(idx_id);
+        state.iter_known_packs(&mut |state2, idx_id| {
+            let mut idx_file = state2.get_idx_file(idx_id);
             let idx_file = match idx_file {
                 Ok(ref mut f) => f.as_mut(),
                 // TODO: should we stop all iteration
                 // if a single idx file failed to read?
                 // I think not? so here I just return None
                 // and continue the iteration at the next idx filename
-                Err(_) => { return None },
+                Err(_) => { return false },
             };
             idx_file.get_partial_matches_with_locations(Some(partial_oid_first_byte), partial_oid, &mut |oid, location| {
                 stop_searching = cb(oid, location);
                 stop_searching
             });
-            // we return None to the fs_helpers callback
-            // so that it doesnt allocate any memory.
-            None
-        })?;
-        Ok(())
+            stop_searching
+        })
     }
 
     pub fn find_matching_oids<F, S>(
