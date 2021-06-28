@@ -470,6 +470,19 @@ impl<'a> LightObjectDB<'a> {
         Ok(idx_file)
     }
 
+    pub fn read_idx_file_from_id(
+        &self,
+        id: OidFull
+    ) -> io::Result<IDXFileLight> {
+        let idx_hex_str = oid_full_to_string_no_alloc(id);
+        let (idx_str_array, take_to) = self.get_idx_file_str_array_from_hash(&idx_hex_str);
+        let search_path_str = std::str::from_utf8(&idx_str_array[0..take_to])
+            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
+        // println!("reading idx file: {}", search_path_str);
+        let idx_file = open_idx_file_light(search_path_str)?;
+        Ok(idx_file)
+    }
+
     pub fn find_matching_oids_packed<F, S>(
         &self,
         partial_oid: PartialOid,
@@ -656,7 +669,7 @@ impl<'a> LightObjectDB<'a> {
     }
 
     fn get_all_packs<F>(&self, cb: &mut F) -> io::Result<()>
-        where F: FnMut(IDXFileLight)
+        where F: FnMut(OidFull)
     {
         let packs_dir = b"pack";
         let (big_str_array, take_index) = self.get_static_path_str(packs_dir);
@@ -673,9 +686,11 @@ impl<'a> LightObjectDB<'a> {
             // ie: 49 chars
             if filename.len() != 49 { return Ok(()); }
             if ! filename.ends_with(".idx") { return Ok(()); }
-            let entry_full = entry.path();
-            let idx_file = open_idx_file_light(entry_full)?;
-            cb(idx_file);
+            let idx_id = parse_pack_or_idx_id(filename)
+                .ok_or_else(|| ioerr!("Failed to parse idx id from filename"))?;
+            // let entry_full = entry.path();
+            // let idx_file = open_idx_file_light(entry_full)?;
+            cb(idx_id);
             Ok(())
         })?;
         Ok(())
@@ -703,5 +718,5 @@ impl<'a> LightObjectDB<'a> {
 
 pub enum Location {
     Loose(Oid, u32),
-    Packed(IDXFileLight),
+    Packed(OidFull),
 }
