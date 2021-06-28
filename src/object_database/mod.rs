@@ -1,5 +1,5 @@
 use std::{path::{PathBuf, Path}, io, convert::{TryInto, TryFrom}};
-use crate::{ioerre, object_id::{Oid, PartialOid, full_oid_to_u128_oid, get_first_byte_of_oid, HEX_BYTES, hash_object_file_and_folder, OidFull, oid_full_to_string_no_alloc}, ioerr, fs_helpers};
+use crate::{ioerre, object_id::{Oid, PartialOid, full_oid_to_u128_oid, get_first_byte_of_oid, HEX_BYTES, hash_object_file_and_folder, OidFull, oid_full_to_string_no_alloc, full_oid_from_str}, ioerr, fs_helpers};
 
 pub mod loose;
 use loose::*;
@@ -573,4 +573,101 @@ impl<'a> LightObjectDB<'a> {
             }
         }
     }
+
+    fn get_all_loose_oids_at_folder<F>(&self, folder: u8, cb: &mut F) -> io::Result<()>
+        where F: FnMut(Oid, u32)
+    {
+        let hex_str_bytes = HEX_BYTES[folder as usize];
+        let (big_str_arr, take_to) = self.get_static_path_str(&hex_str_bytes);
+        let search_str = std::str::from_utf8(&big_str_arr[0..take_to])
+            .map_err(|_| ioerr!("Failed to find oid folder string"))?;
+        fs_helpers::search_folder_out_missing_ok(search_str, |entry| {
+            let entryname = entry.file_name();
+            let filename = match entryname.to_str() {
+                Some(f) => f,
+                // its possible theres weird files in this dir for some reason
+                // we dont want that to throw us off, so we just ignore them
+                None => return Ok(()),
+            };
+            // a valid object file should be 38 hex chars, the folder
+            // is the other 2 chars
+            if filename.len() != 38 { return Ok(()); }
+
+            // the first 30 chars of the filename + the first
+            // 2 chars of the folder = 32 hex chars = 16 bytes,
+            // which is 128 bits, or enough to support our Oid.
+            // the remaining 8 chars of the filename will be 4 bytes,
+            // or a u32 which we use as the remaining data:
+            let first_part = &filename[0..30];
+            let oid = Oid::from_str_radix(first_part, 16).map_err(|e| ioerr!("{}", e))?;
+            let oid = oid + ((folder as u128) << 120);
+            // println!("{:x}/{}", folder, filename);
+            // println!("{:032x}", oid);
+            // rest 4 bytes:
+            let rest_part = &filename[30..38];
+            let rest = u32::from_str_radix(rest_part, 16).map_err(|e| ioerr!("{}", e))?;
+
+            cb(oid, rest);
+            Ok(())
+        })
+    }
+
+    fn get_all_loose_oids<F>(&self, cb: &mut F) -> io::Result<()>
+        where F: FnMut(Oid, u32)
+    {
+        for i in 0u8..=255 {
+            self.get_all_loose_oids_at_folder(i, cb)?;
+        }
+        Ok(())
+    }
+
+    fn get_all_packs<F>(&self, cb: &mut F) -> io::Result<()>
+        where F: FnMut(IDXFileLight)
+    {
+        let packs_dir = b"pack";
+        let (big_str_array, take_index) = self.get_static_path_str(packs_dir);
+        let search_path_str = std::str::from_utf8(&big_str_array[0..take_index])
+            .map_err(|e| ioerr!("Failed to convert path string to utf8...\n{}", e))?;
+        fs_helpers::search_folder_out(search_path_str, |entry| {
+            let entryname = entry.file_name();
+            let filename = match entryname.to_str() {
+                Some(f) => f,
+                // skip this unknown/weird file
+                None => { return Ok(());}
+            };
+            // it should be: "pack-{40 hex chars}.idx"
+            // ie: 49 chars
+            if filename.len() != 49 { return Ok(()); }
+            if ! filename.ends_with(".idx") { return Ok(()); }
+            let entry_full = entry.path();
+            let idx_file = open_idx_file_light(entry_full)?;
+            cb(idx_file);
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    /// iterate over all loose objects, and all pack files.
+    /// for loose objects, return an enum variant that contains the Oid,
+    /// and the the 'remaining' bits as a u32, for the packed files found,
+    /// return the idx file loaded.
+    pub fn iter_all_known_objects<F>(
+        &self,
+        cb: &mut F,
+    ) -> io::Result<()>
+        where F: FnMut(Location)
+    {
+        self.get_all_loose_oids(&mut |oid, rest| {
+            cb(Location::Loose(oid, rest));
+        })?;
+        self.get_all_packs(&mut |idx_file| {
+            cb(Location::Packed(idx_file));
+        })?;
+        Ok(())
+    }
+}
+
+pub enum Location {
+    Loose(Oid, u32),
+    Packed(IDXFileLight),
 }
