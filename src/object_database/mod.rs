@@ -10,7 +10,6 @@ use flate2::Decompress;
 use state::{State, IDXState};
 
 pub mod state;
-pub mod light_state;
 
 
 /// A trait used to see if 2 Oids match.
