@@ -147,6 +147,24 @@ impl<'a> LightObjectDB<'a> {
     }
 
     #[inline(always)]
+    fn get_loose_item_str_array(&self, oid_full: OidFull) -> io::Result<([u8; MAX_PATH_TO_DB_LEN], usize)> {
+        let oid_full_str = oid_full_to_string_no_alloc(oid_full);
+        let oid_full_str = std::str::from_utf8(&oid_full_str)
+            .map_err(|_| ioerr!("Failed to convert oid into string"))?;
+
+        let oid_full_str_bytes = oid_full_str.as_bytes();
+        let mut out: [u8; 41] = [
+            oid_full_str_bytes[0], oid_full_str_bytes[1], main_sep_byte(),
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        // so right now we have "[hex0][hex1]/000000000..."
+        // so we just copy the remaining full str bytes
+        // into the 0s:
+        out[3..].copy_from_slice(&oid_full_str_bytes[2..]);
+        Ok(self.get_static_path_str(&out))
+    }
+
+    #[inline(always)]
     pub fn get_pack_file_str_array_from_hash(&self, hex_str: &[u8]) -> ([u8; MAX_PATH_TO_DB_LEN], usize) {
         // now we have our output str array:
         let mut out: [u8; 55] = [
@@ -204,6 +222,22 @@ impl<'a> LightObjectDB<'a> {
         let transformed = F::try_from(resolved_obj)
             .map_err(|e| ioerr!("Failed to get loose object\n{}", e.to_string()))?;
         Ok(transformed)
+    }
+
+    pub fn get_loose_object_from_oid_full<F, S>(
+        &self,
+        loose_obj_id: OidFull,
+        state: &mut S,
+    ) -> io::Result<F>
+        where F: TryFrom<UnparsedObject>,
+              F::Error: ToString,
+              S: State,
+    {
+        // first we recontruct the loose object path:
+        let (big_arr, take_to) = self.get_loose_item_str_array(loose_obj_id)?;
+        let loose_obj_path = std::str::from_utf8(&big_arr[0..take_to])
+            .map_err(|_| ioerr!("Failed to create loose object id path"))?;
+        self.get_loose_object(loose_obj_path, state)
     }
 
     /// This is a helper function to first:
