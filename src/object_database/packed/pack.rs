@@ -307,60 +307,39 @@ impl PackFile {
         Ok(out_vec)
     }
 
-    /// The continuation of `get_object_type_and_len_at_index`.
-    /// Call this to fully resolve an object from a packfile using previously
-    /// found information from the `get_object_type_and_len_at_index` call.
-    /// This function will recursively resolve delta offsets (but not reference deltas!)
-    /// and return an unparsed object that should be either a commit, tree, blob, or tag.
-    pub fn resolve_unparsed_object(
+    pub fn resolve_simple_object(
         &self,
+        decompressor: &mut Decompress,
         decompressed_size: usize,
         starts_at: usize,
-        object_type: PackFileObjectType,
-        decompressor: &mut Decompress,
+        unparsed_type: UnparsedObjectType,
     ) -> io::Result<UnparsedObject> {
-        let (unparsed_object, this_object_data) = match object_type {
-            PackFileObjectType::OfsDelta(base_starts_at) => {
-                let (
-                    next_obj_type,
-                    next_obj_size,
-                    next_obj_index
-                ) = self.get_object_type_and_len_at_index(base_starts_at)?;
-                let next_obj_size: usize = next_obj_size.try_into()
-                    .map_err(|_| ioerr!("Failed to convert {} into a usize. Either we failed at parsing this value, or your architecture does not support numbers this large", next_obj_size))?;
-                decompressor.reset(true);
-                let base_raw_data = self.resolve_unparsed_object(next_obj_size, next_obj_index, next_obj_type, decompressor)?;
-                let our_data = self.get_decompressed_data_from_index(decompressed_size, starts_at, decompressor)?;
-                (base_raw_data, our_data)
-            }
-
-            // for a ref delta, we need to search the index file
-            // to find where this object exists in our packfile.
-            // i don't think the packfile itself has
-            // enough information to find it.
-            PackFileObjectType::RefDelta(id) => {
-                let id_str = oid_full_to_string(id);
-                return ioerre!("Not enough information to load base object of id {}. This base object needs to be resolved first by the .idx file before the pack file can parse it.", id_str);
-            }
-
-            // these can be simply decompressed:
-            PackFileObjectType::Commit |
-            PackFileObjectType::Tree |
-            PackFileObjectType::Blob |
-            PackFileObjectType::Tag => {
-                decompressor.reset(true);
-                let data = self.get_decompressed_data_from_index(decompressed_size, starts_at, decompressor)?;
-                // safe to unwrap because we know we are only passing a
-                // simple type that can be converted:
-                let unparsed_type = object_type.into_unparsed_type().unwrap();
-                let unparsed_obj = UnparsedObject {
-                    object_type: unparsed_type,
-                    payload: data,
-                };
-                return Ok(unparsed_obj);
-            }
+        decompressor.reset(true);
+        let data = self.get_decompressed_data_from_index(decompressed_size, starts_at, decompressor)?;
+        let unparsed_obj = UnparsedObject {
+            object_type: unparsed_type,
+            payload: data,
         };
+        Ok(unparsed_obj)
+    }
 
+    pub fn resolve_ofs_delta_object(
+        &self,
+        decompressor: &mut Decompress,
+        decompressed_size: usize,
+        starts_at: usize,
+        base_starts_at: usize,
+    ) -> io::Result<UnparsedObject> {
+        let (
+            next_obj_type,
+            next_obj_size,
+            next_obj_index
+        ) = self.get_object_type_and_len_at_index(base_starts_at)?;
+        let next_obj_size: usize = next_obj_size.try_into()
+            .map_err(|_| ioerr!("Failed to convert {} into a usize. Either we failed at parsing this value, or your architecture does not support numbers this large", next_obj_size))?;
+        decompressor.reset(true);
+        let unparsed_object = self.resolve_unparsed_object(next_obj_size, next_obj_index, next_obj_type, decompressor)?;
+        let this_object_data = self.get_decompressed_data_from_index(decompressed_size, starts_at, decompressor)?;
         let base_object_data = unparsed_object.payload;
         let base_object_type = unparsed_object.object_type;
 
@@ -378,11 +357,51 @@ impl PackFile {
         // eprintln!("Our delta data: {}", this_object_data.len());
         // eprintln!("We should be turned into a data of size: {}", our_size);
         let data_out = apply_delta(&base_object_data, this_object_data, our_size)?;
-        let unparsed_obj = UnparsedObject {
+        let unparsed_obj_out = UnparsedObject {
             object_type: base_object_type,
             payload: data_out
         };
-        Ok(unparsed_obj)
+        Ok(unparsed_obj_out)
+    }
+
+    /// The continuation of `get_object_type_and_len_at_index`.
+    /// Call this to fully resolve an object from a packfile using previously
+    /// found information from the `get_object_type_and_len_at_index` call.
+    /// This function will recursively resolve delta offsets (but not reference deltas!)
+    /// and return an unparsed object that should be either a commit, tree, blob, or tag.
+    pub fn resolve_unparsed_object(
+        &self,
+        decompressed_size: usize,
+        starts_at: usize,
+        object_type: PackFileObjectType,
+        decompressor: &mut Decompress,
+    ) -> io::Result<UnparsedObject> {
+        match object_type {
+            PackFileObjectType::Commit => {
+                self.resolve_simple_object(
+                    decompressor, decompressed_size, starts_at, UnparsedObjectType::Commit)
+            }
+            PackFileObjectType::Tree => {
+                self.resolve_simple_object(
+                    decompressor, decompressed_size, starts_at, UnparsedObjectType::Tree)
+            }
+            PackFileObjectType::Blob => {
+                self.resolve_simple_object(
+                    decompressor, decompressed_size, starts_at, UnparsedObjectType::Blob)
+            }
+            PackFileObjectType::Tag => {
+                self.resolve_simple_object(
+                    decompressor, decompressed_size, starts_at, UnparsedObjectType::Tag)
+            }
+            PackFileObjectType::OfsDelta(base_starts_at) => {
+                self.resolve_ofs_delta_object(
+                    decompressor, decompressed_size, starts_at, base_starts_at)
+            }
+            PackFileObjectType::RefDelta(id) => {
+                let id_str = oid_full_to_string(id);
+                return ioerre!("Not enough information to load base object of id {}. This base object needs to be resolved first by the .idx file before the pack file can parse it.", id_str);
+            }
+        }
     }
 }
 
