@@ -1,10 +1,9 @@
 use std::{io, path::{Path, PathBuf}, convert::{TryInto, TryFrom}};
-use crate::{fs_helpers, object_id::{oid_full_to_string, OidFull}, ioerre, ioerr, object_database::loose::{UnparsedObjectType, UnparsedObject, UNPARSED_PAYLOAD_STATIC_SIZE}};
+use crate::{fs_helpers, object_id::{oid_full_to_string, OidFull}, ioerre, ioerr, object_database::loose::{UnparsedObjectType, UnparsedObject}};
 use byteorder::{ByteOrder, BigEndian};
 use memmap2::Mmap;
 use super::{apply_delta, parse_pack_or_idx_id};
 use flate2::{FlushDecompress, Decompress};
-use tinyvec::{TinyVec, tiny_vec, ArrayVec};
 
 
 pub const PACK_SIGNATURE: &[u8; 4] = b"PACK";
@@ -266,7 +265,7 @@ impl PackFile {
         decompressed_size: usize,
         starts_at: usize,
         decompressor: &mut Decompress,
-    ) -> io::Result<TinyVec<[u8; UNPARSED_PAYLOAD_STATIC_SIZE]>> {
+    ) -> io::Result<Vec<u8>> {
         // Is it guaranteed that compressed data is ALWAYS smaller
         // than the decompressed output? This is quite an assumption here...
         // to be safe, we will extend it by 128 bytes. But then
@@ -283,16 +282,10 @@ impl PackFile {
         let compressed_data = self.mmapped_file.get(compressed_data_range)
             .ok_or_else(|| ioerr!("Failed to read compressed data of pack file"))?;
 
-        let mut out_vec = {
-            let tinyout = if decompressed_size > UNPARSED_PAYLOAD_STATIC_SIZE {
-                // too big to fit in array, allocate on heap:
-                let v = vec![0; decompressed_size];
-                TinyVec::Heap(v)
-            } else {
-                let a: [u8; UNPARSED_PAYLOAD_STATIC_SIZE] = [0; UNPARSED_PAYLOAD_STATIC_SIZE];
-                TinyVec::Inline(ArrayVec::from_array_len(a, decompressed_size))
-            };
-            tinyout
+        let mut out_vec = unsafe {
+            let mut v = Vec::with_capacity(decompressed_size);
+            v.set_len(decompressed_size);
+            v
         };
         // TODO: need to care about this decompressed state?
         // is it possible that we don't read into the entire

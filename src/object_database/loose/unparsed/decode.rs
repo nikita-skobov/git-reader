@@ -2,8 +2,7 @@ use crate::{fs_helpers, ioerr, ioerre};
 use std::{io, path::Path, fs::File, fmt::Debug, str::FromStr};
 use flate2::{Decompress, Status, FlushDecompress};
 use io::{BufRead, Read};
-use super::{UnparsedObject, UnparsedObjectType, UNPARSED_PAYLOAD_STATIC_SIZE};
-use tinyvec::{ArrayVec, tiny_vec, TinyVec};
+use super::{UnparsedObject, UnparsedObjectType};
 
 /// returns the type of object, the size of the actual decompressed object
 /// (the value the object header), and the index of where the
@@ -162,7 +161,7 @@ pub fn read_raw_object<P: AsRef<Path>>(
         // read it, so we just return with an empty vec:
         return Ok(UnparsedObject {
             object_type: first_read_info.object_type,
-            payload: tiny_vec!(),
+            payload: vec![],
         })
     }
 
@@ -196,26 +195,16 @@ pub fn read_raw_object<P: AsRef<Path>>(
     // buffer to be the exact size that we expect to put into it.
     // it should be the size of the payload that we decoded from the header
     let desired_output_buffer_len = first_read_info.payload_size;
-    let desired_out: TinyVec<[u8; UNPARSED_PAYLOAD_STATIC_SIZE]> = {
-        let tinyout = if desired_output_buffer_len > UNPARSED_PAYLOAD_STATIC_SIZE {
-            // too big to fit in array, allocate on heap:
-            let mut v = vec![0; desired_output_buffer_len];
-            v[0..desired_bytes].copy_from_slice(desired_slice_to_copy);
-            TinyVec::Heap(v)
-        } else {
-            let mut a: [u8; UNPARSED_PAYLOAD_STATIC_SIZE] = [0; UNPARSED_PAYLOAD_STATIC_SIZE];
-            a[0..desired_bytes].copy_from_slice(desired_slice_to_copy);
-            TinyVec::Inline(ArrayVec::from_array_len(a, desired_output_buffer_len))
-        };
-        tinyout
+    let mut output_buffer = unsafe {
+        let mut v = Vec::with_capacity(desired_output_buffer_len);
+        v.set_len(desired_output_buffer_len);
+        v
     };
-
-    
+    output_buffer[0..desired_bytes].copy_from_slice(desired_slice_to_copy);    
     // eprintln!("Decompressed so far: {}", bytes_read_out_so_far);
     // eprintln!("Desired bytes: {}", desired_bytes);
     // eprintln!("Desired slice len: {}", desired_slice_to_copy.len());
     // eprintln!("Desired output len: {}", desired_out.len());
-    let mut output_buffer = desired_out;
     let bytes_input = decompressor.total_in() as usize;
     let bytes_out = bytes_read_out_so_far - desired_data_starts_at;
 
