@@ -232,9 +232,25 @@ pub fn oid_parts_to_full(oid: Oid, rest: u32) -> OidFull {
 
 /// Only call this if you know your slice has at least 16 bytes
 pub fn full_slice_oid_to_u128_oid(full: &[u8]) -> Oid {
-    let mut trunc = OidTruncated::default();
-    trunc.copy_from_slice(&full[0..16]);
-    trunc_oid_to_u128_oid(trunc)
+    let thing = [
+        (full[0] as u128) << 120,
+        (full[1] as u128) << 112,
+        (full[2] as u128) << 104,
+        (full[3] as u128) << 96,
+        (full[4] as u128) << 88,
+        (full[5] as u128) << 80,
+        (full[6] as u128) << 72,
+        (full[7] as u128) << 64,
+        (full[8] as u128) << 56,
+        (full[9] as u128) << 48,
+        (full[10] as u128) << 40,
+        (full[11] as u128) << 32,
+        (full[12] as u128) << 24,
+        (full[13] as u128) << 16,
+        (full[14] as u128) << 8,
+        (full[15] as u128)
+    ];
+    thing[0] | thing[1] | thing[2] | thing[3] | thing[4] | thing[5] | thing[6] | thing[7] | thing[8] | thing[9] | thing[10] | thing[11] | thing[12] | thing[13] | thing[14] | thing[15]
 }
 
 /// 256 values of hex bytes. each value is an array
