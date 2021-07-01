@@ -69,6 +69,13 @@ pub struct CommitOnlyMessageNoAuthorOrCommitter {
     pub message: String,
 }
 
+#[derive(Default)]
+pub struct CommitOnlyParents {
+    pub parent_one: Oid,
+    pub parent_two: Oid,
+    pub extra_parents: Vec<Oid>,
+}
+
 /// TODO: implement parsing
 pub struct CommitNoMessage {
     pub tree: Oid,
@@ -85,6 +92,13 @@ pub struct CommitOnlyTreeAndParents {
     pub parent_one: Oid,
     pub parent_two: Oid,
     pub extra_parents: Vec<Oid>,
+}
+
+pub struct CommitOnlyParentsAndMessage {
+    pub parent_one: Oid,
+    pub parent_two: Oid,
+    pub extra_parents: Vec<Oid>,
+    pub message: String,
 }
 
 impl Display for CommitFull {
@@ -104,6 +118,25 @@ impl Display for CommitFull {
             parent_str = format!("{}\nparent {}", parent_str, hex_u128_to_str(*parent));
         }
         write!(f, "tree {}\n{}\nauthor {}\ncommitter {}\n\n{}", tree_id_str, parent_str, self.author, self.committer, self.message)
+    }
+}
+
+impl Display for CommitOnlyParents {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let parent_str = if self.parent_one == 0 {
+            "".into()
+        } else {
+            format!("parent {}", hex_u128_to_str(self.parent_one))
+        };
+        let mut parent_str = if self.parent_two == 0 {
+            parent_str
+        } else {
+            format!("{}\nparent {}", parent_str, hex_u128_to_str(self.parent_two))
+        };
+        for parent in self.extra_parents.iter() {
+            parent_str = format!("{}\nparent {}", parent_str, hex_u128_to_str(*parent));
+        }
+        write!(f, "{}\n", parent_str)
     }
 }
 
@@ -144,6 +177,25 @@ impl Display for CommitOnlyMessageNoAuthorOrCommitter {
             parent_str = format!("{}\nparent {}", parent_str, hex_u128_to_str(*parent));
         }
         write!(f, "tree {}\n{}\n\n{}", tree_id_str, parent_str, self.message)
+    }
+}
+
+impl Display for CommitOnlyParentsAndMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let parent_str = if self.parent_one == 0 {
+            "".into()
+        } else {
+            format!("parent {}", hex_u128_to_str(self.parent_one))
+        };
+        let mut parent_str = if self.parent_two == 0 {
+            parent_str
+        } else {
+            format!("{}\nparent {}", parent_str, hex_u128_to_str(self.parent_two))
+        };
+        for parent in self.extra_parents.iter() {
+            parent_str = format!("{}\nparent {}", parent_str, hex_u128_to_str(*parent));
+        }
+        write!(f, "{}\n\n{}", parent_str, self.message)
     }
 }
 
@@ -296,6 +348,36 @@ impl ParseCommit for CommitOnlyMessageNoAuthorOrCommitter {
     }
 }
 
+impl ParseCommit for CommitOnlyParentsAndMessage {
+    fn parse_inner(
+        raw: &[u8],
+        current_index: &mut usize
+    ) -> io::Result<Self> where Self: Sized {
+        let only_parents = CommitOnlyParents::parse_inner(raw, current_index)?;
+        let _ = parse_author(raw, current_index, false)?;
+        let _ = parse_committer(raw, current_index, false)?;
+        let rest_of_data = &raw[*current_index..];
+        // for the only message mode, we wish to only allocate for the
+        // first part of the commit message, so we read up to
+        // the first newline we find. if we don't find the newline, then
+        // we take everything:
+        let message = if let Some(newline_index) = rest_of_data.iter().position(|b| *b == b'\n') {
+            let commit_message_raw = &rest_of_data[0..newline_index];
+            String::from_utf8_lossy(commit_message_raw)
+        } else {
+            let commit_message_raw = &rest_of_data[0..];
+            String::from_utf8_lossy(commit_message_raw)
+        };
+        let obj = Self {
+            parent_one: only_parents.parent_one,
+            parent_two: only_parents.parent_two,
+            extra_parents: only_parents.extra_parents,
+            message: message.to_string(),  
+        };
+        Ok(obj)
+    }
+}
+
 impl ParseCommit for CommitFullMessageAndDescription {
     fn parse_inner(
         raw: &[u8],
@@ -343,8 +425,47 @@ impl ParseCommit for CommitOnlyTreeAndParents {
         curr: &mut usize
     ) -> io::Result<Self> where Self: Sized {
         let mut out = Self::default();
-        let (tree_id, next_index) = parse_tree(raw)?;
+        let (tree_id, next_index) = parse_tree(raw, true)?;
         out.tree = tree_id;
+        *curr = next_index;
+
+        // is there a parent?
+        let parent_option = parse_parent(raw, curr)?;
+        if let Some(parent) = parent_option {
+            out.parent_one = parent;
+        } else {
+            return Ok(out);
+        }
+
+        // Yes, we found first parent, but what about second parent?
+        let parent_option = parse_parent(raw, curr)?;
+        if let Some(parent) = parent_option {
+            out.parent_two = parent;
+        } else {
+            return Ok(out);
+        }
+
+        // now, we loop, and add a potentially arbitrary number of parents:
+        loop {
+            if let Some(parent) = parse_parent(raw, curr)? {
+                out.extra_parents.push(parent);
+            } else {
+                // No extra parent, we are done parsing:
+                break;
+            }
+        }
+
+        Ok(out)
+    }
+}
+
+impl ParseCommit for CommitOnlyParents {
+    fn parse_inner(
+        raw: &[u8],
+        curr: &mut usize
+    ) -> io::Result<Self> where Self: Sized {
+        let mut out = Self::default();
+        let (_, next_index) = parse_tree(raw, false)?;
         *curr = next_index;
 
         // is there a parent?
@@ -514,7 +635,15 @@ pub fn parse_committer(
     Ok(committer_str)
 }
 
-pub fn parse_tree(raw: &[u8]) -> io::Result<(Oid, usize)> {
+pub fn parse_tree(
+    raw: &[u8],
+    should_allocate: bool,
+) -> io::Result<(Oid, usize)> {
+    if !should_allocate {
+        // this just assumes a tree is here, and skips
+        // to index 46 (past the tree line)
+        return Ok((0, 46));
+    }
     // a tree line should be 5 bytes for the string "tree "
     // and then 40 bytes for the hex chars of the tree oid,
     // and then 1 byte as the newline. so lets get
@@ -595,7 +724,7 @@ mod tests {
         // our OIDs only take first 32 hex chars
         // for the hash:
         let line = b"tree 0000000000000000000000000000000f00000000\nauthor me <me> 1623986985 -0500";
-        let (tree_hash, next_index) = parse_tree(line).unwrap();
+        let (tree_hash, next_index) = parse_tree(line, true).unwrap();
         assert_eq!(tree_hash, 15);
         assert_eq!(next_index, 46);
     }
@@ -603,7 +732,7 @@ mod tests {
     #[test]
     fn tree_and_parent_parsing_works() {
         let line = b"tree 0000000000000000000000000000000100000000\nparent 0000000000000000000000000000000200000000\nparent 0000000000000000000000000000000300000000\nauthor me...";
-        let (tree_hash, mut next_index) = parse_tree(line).unwrap();
+        let (tree_hash, mut next_index) = parse_tree(line, true).unwrap();
         assert_eq!(tree_hash, 1);
         assert_eq!(next_index, 46);
 
