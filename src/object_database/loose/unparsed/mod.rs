@@ -12,7 +12,7 @@ pub use decode::*;
 /// the majority of what youre parsing is commits/trees
 /// as most of them should fit in this size.
 /// but for blobs, it most likely will always be heap allocated.
-pub const UNPARSED_PAYLOAD_STATIC_SIZE: usize = 2048;
+pub const UNPARSED_PAYLOAD_STATIC_SIZE: usize = 4096;
 
 #[derive(Debug, PartialOrd, PartialEq)]
 pub enum UnparsedObjectType {

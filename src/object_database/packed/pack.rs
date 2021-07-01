@@ -4,7 +4,7 @@ use byteorder::{ByteOrder, BigEndian};
 use memmap2::Mmap;
 use super::{apply_delta, parse_pack_or_idx_id};
 use flate2::{FlushDecompress, Decompress};
-use tinyvec::{TinyVec, tiny_vec};
+use tinyvec::{TinyVec, tiny_vec, ArrayVec};
 
 
 pub const PACK_SIGNATURE: &[u8; 4] = b"PACK";
@@ -283,9 +283,17 @@ impl PackFile {
         let compressed_data = self.mmapped_file.get(compressed_data_range)
             .ok_or_else(|| ioerr!("Failed to read compressed data of pack file"))?;
 
-        // let mut out_vec = vec![0; decompressed_size];
-        let mut out_vec = tiny_vec!([u8; UNPARSED_PAYLOAD_STATIC_SIZE]);
-        out_vec.resize(decompressed_size, 0);
+        let mut out_vec = {
+            let tinyout = if decompressed_size > UNPARSED_PAYLOAD_STATIC_SIZE {
+                // too big to fit in array, allocate on heap:
+                let v = vec![0; decompressed_size];
+                TinyVec::Heap(v)
+            } else {
+                let a: [u8; UNPARSED_PAYLOAD_STATIC_SIZE] = [0; UNPARSED_PAYLOAD_STATIC_SIZE];
+                TinyVec::Inline(ArrayVec::from_array_len(a, decompressed_size))
+            };
+            tinyout
+        };
         // TODO: need to care about this decompressed state?
         // is it possible that we don't read into the entire
         // out vec in one go?
