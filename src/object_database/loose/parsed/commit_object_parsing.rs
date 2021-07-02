@@ -368,11 +368,12 @@ impl ParseCommit for CommitOnlyParentsAndMessage {
             let commit_message_raw = &rest_of_data[0..];
             String::from_utf8_lossy(commit_message_raw)
         };
+        // TODO: can we parse merge tags faster?
         let obj = Self {
             parent_one: only_parents.parent_one,
             parent_two: only_parents.parent_two,
             extra_parents: only_parents.extra_parents,
-            message: message.to_string(),  
+            message: message.to_string(),
         };
         Ok(obj)
     }
