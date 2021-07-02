@@ -1,6 +1,7 @@
 use std::{path::Path, io, fmt::Debug, mem::size_of};
+use std::convert::TryInto;
 use byteorder::{BigEndian, ByteOrder};
-use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_slice_oid_to_u128_oid, OidFull}, ioerr};
+use crate::{ioerre, fs_helpers, object_id::{get_first_byte_of_oid, Oid, full_slice_oid_to_u128_oid, OidFull, OidTruncated}, ioerr};
 use memmap2::Mmap;
 use super::parse_pack_or_idx_id;
 
@@ -227,6 +228,71 @@ impl IDXFileLight {
             // // let sha_bytes = &self.file[start_index..(start_index + SHA1_SIZE)];
             let oid = full_slice_oid_to_u128_oid(&sha_bytes);
             let should_stop_iterating = cb(oid, current_fanout_index);
+            if should_stop_iterating { break; }
+
+            // if V1, we have to seek ahead 4 bytes to skip
+            // the offsets, but in V2, we just read the next SHA
+            start_index += seek_up;
+            current_fanout_index += 1;
+        }
+    }
+
+    /// Like `walk_all_oids_with_index_and_from`, but instead of converting
+    /// each SHA slice into an Oid, it passes just the reference of that byte slice
+    /// which is exactly 16 bytes of u8. This is faster than `walk_all_oids_with_index_and_from`
+    /// because it does not do the conversion.
+    pub fn walk_all_oid_slices_with_index_and_from(
+        &self,
+        start_byte: Option<u8>,
+        cb: impl FnMut(&OidTruncated, usize) -> bool
+    ) {
+        let mut cb = cb;
+        let start_fanout_index = match start_byte {
+            Some(first_byte) => {
+                let first_byte = first_byte as usize;
+                if first_byte > 0 {
+                    self.fanout_table[first_byte - 1]
+                } else {
+                    0
+                }    
+            }
+            None => 0,
+        };
+
+        let start_fanout_index = start_fanout_index as usize;
+        // now we know which Nth oid we want, so now find the index of this oid,
+        // as well as establish how many bytes we need to skip each time we advance to
+        // the (N + 1)th oid.
+        let (mut start_index, seek_up) = match self.version {
+            IDXVersion::V1 => {
+                let start_i = self.get_oid_starting_index_from_fanout_index_v1(start_fanout_index);
+                // v1 requires a seekup of 4 bytes + 20 bytes for the oid
+                (start_i, FANOUT_ENTRY_SIZE + SHA1_SIZE)
+            }
+            IDXVersion::V2 => {
+                let start_i = self.get_oid_starting_index_from_fanout_index_v2(start_fanout_index);
+                // v2 doesnt require up other than the oid size. if we read 20 bytes
+                // the next oid is at the next 20 bytes immediately after
+                (start_i, 0 + SHA1_SIZE)
+            }
+        };
+
+        let mut current_fanout_index = start_fanout_index;
+        for _ in start_fanout_index..self.num_objects {
+            // we always read SHA1_SIZE:
+            // NOTE: we should protect ourselves from reading
+            // too many objects in the above for loop start index,
+            // but just in case, we should stop iterating if we somehow
+            // reached the end of the file:
+            let sha_bytes = match self.file.get(start_index..(start_index + SHA1_SIZE)) {
+                Some(b) => b,
+                None => { break; }
+            };
+            // the expect will basically never ever happen.
+            // we already know we have 20 bytes, this cannot fail.
+            let sha_arr: &OidTruncated = &sha_bytes[0..16].try_into()
+                .expect("Horrible library error! Successfully read 20 bytes of a SHA hash but failed to convert into an array of 16 bytes somehow");
+            let should_stop_iterating = cb(sha_arr, current_fanout_index);
             if should_stop_iterating { break; }
 
             // if V1, we have to seek ahead 4 bytes to skip
