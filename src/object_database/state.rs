@@ -3,7 +3,7 @@ use flate2::Decompress;
 use crate::{ioerr, object_id::{Oid, OidFull, oid_full_to_string_no_alloc, get_first_byte_of_oid, HEX_BYTES, hash_object_file_and_folder, hash_object_file_and_folder_full}, ioerre, fs_helpers};
 use std::{collections::{HashMap, BTreeMap}, io};
 use super::{main_sep_byte, MAX_PATH_TO_DB_LEN, packed::{open_idx_file_light, IDXFileLight, parse_pack_or_idx_id}, DoesMatch, FoundPackedLocation, FoundObjectLocation};
-use tinyvec::{tiny_vec, TinyVec};
+// use tinyvec::{tiny_vec, TinyVec};
 
 pub enum OwnedOrBorrowedMut<'a, T> {
     Owned(T),
@@ -117,7 +117,7 @@ pub trait IDXState {
 }
 
 pub struct IDXMapped {
-    pub fanout_map: TinyVec<[Oid; 512]>,
+    pub fanout_map: Vec<Oid>,
     pub map: BTreeMap<Oid, (usize, u64)>,
     pub id: OidFull,
 }
@@ -352,7 +352,7 @@ impl State for MinState {
 pub struct SlightlyBetterState {
     pub fallback: MinState,
     pub loose_map: [Option<BTreeMap<Oid, OidFull>>; 256],
-    pub known_packs: TinyVec<[OidFull; 64]>,
+    pub known_packs: Vec<OidFull>,
 
     pub idx_file_map: HashMap<OidFull, usize>,
     pub idx_files: Vec<IDXMapped>,
@@ -364,7 +364,7 @@ impl SlightlyBetterState {
         Ok(SlightlyBetterState {
             fallback: min,
             loose_map: default_loose_map(),
-            known_packs: tiny_vec!(),
+            known_packs: vec![],
             idx_files: vec![],
             idx_file_map: HashMap::new(),
         })
@@ -485,7 +485,7 @@ impl State for SlightlyBetterState {
         let mut idx_file = self.fallback.get_idx_file(id)?;
         let idx_file = idx_file.as_mut();
         let mut map = IDXMapped {
-            fanout_map: tiny_vec!(),
+            fanout_map: vec![],
             map: BTreeMap::new(),
             id: id,  
         };
