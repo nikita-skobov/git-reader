@@ -22,6 +22,8 @@ pub type OidTruncated = [u8; 16];
 /// an OidTruncated which can be turned into an Oid
 pub struct OidStrTruncated(pub [u8; 32]);
 
+pub const OID_TRUNC_ZERO: OidTruncated = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
 #[derive(Debug, Copy, Clone)]
 pub struct OidStrFull(pub [u8; 40]);
 
@@ -117,6 +119,11 @@ pub fn hex_u128_to_str(h: Oid) -> String {
     format!("{}{}", prepend_0s, hash_str)
 }
 
+pub fn hex_u128_trunc_to_str(h: OidTruncated) -> String {
+    let oid = Oid::from_be_bytes(h);
+    hex_u128_to_str(oid)
+}
+
 /// Not very well optimized, I know, but we only need
 /// to print full hex strings for debugging purposes probably
 pub fn oid_full_to_string(h: OidFull) -> String {
@@ -170,6 +177,21 @@ pub fn full_oid_from_str(hash: &str) -> Option<OidFull> {
         oid_full[i] = byte;
     }
     Some(oid_full)
+}
+
+/// only call this if hash is at least 32 bytes
+pub fn trunc_oid_from_hex_bytes(hash: &str) -> Option<OidTruncated> {
+    let mut oid_trunc = OidTruncated::default();
+    for i in 0..16 {
+        // this should give us 2 characters at a time:
+        let hex_range_start = i * 2;
+        let hex_range = hex_range_start..(hex_range_start + 2);
+        let hex = &hash[hex_range];
+        // now we parse those 2 hex chars into a u8:
+        let byte = u8::from_str_radix(hex, 16).ok()?;
+        oid_trunc[i] = byte;
+    }
+    Some(oid_trunc)
 }
 
 pub fn hash_str_to_oid(hash: &str) -> io::Result<Oid> {
@@ -226,6 +248,14 @@ pub fn oid_parts_to_full(oid: Oid, rest: u32) -> OidFull {
     let oid_arr = oid.to_be_bytes();
     let rest_arr = rest.to_be_bytes();
     full[0..16].copy_from_slice(&oid_arr);
+    full[16..].copy_from_slice(&rest_arr);
+    full
+}
+
+pub fn oid_trunc_parts_to_full(oid: OidTruncated, rest: u32) -> OidFull {
+    let mut full = OidFull::default();
+    let rest_arr = rest.to_be_bytes();
+    full[0..16].copy_from_slice(&oid[..]);
     full[16..].copy_from_slice(&rest_arr);
     full
 }

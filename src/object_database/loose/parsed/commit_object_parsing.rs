@@ -1,4 +1,4 @@
-use crate::{ioerre, object_id::{Oid, hex_u128_to_str}, ioerr};
+use crate::{ioerre, object_id::{Oid, hex_u128_to_str, OidTruncated, OID_TRUNC_ZERO, hex_u128_trunc_to_str, trunc_oid_from_hex_bytes}, ioerr};
 use std::{fmt::Display, io};
 
 pub trait ParseCommit: Display {
@@ -76,6 +76,13 @@ pub struct CommitOnlyParents {
     pub extra_parents: Vec<Oid>,
 }
 
+#[derive(Default)]
+pub struct CommitOnlyParentsOidTrunc {
+    pub parent_one: OidTruncated,
+    pub parent_two: OidTruncated,
+    pub extra_parents: Vec<OidTruncated>,
+}
+
 /// TODO: implement parsing
 pub struct CommitNoMessage {
     pub tree: Oid,
@@ -98,6 +105,13 @@ pub struct CommitOnlyParentsAndMessage {
     pub parent_one: Oid,
     pub parent_two: Oid,
     pub extra_parents: Vec<Oid>,
+    pub message: String,
+}
+
+pub struct CommitOnlyParentsAndMessageOidTrunc {
+    pub parent_one: OidTruncated,
+    pub parent_two: OidTruncated,
+    pub extra_parents: Vec<OidTruncated>,
     pub message: String,
 }
 
@@ -196,6 +210,44 @@ impl Display for CommitOnlyParentsAndMessage {
             parent_str = format!("{}\nparent {}", parent_str, hex_u128_to_str(*parent));
         }
         write!(f, "{}\n\n{}", parent_str, self.message)
+    }
+}
+
+impl Display for CommitOnlyParentsAndMessageOidTrunc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let parent_str = if self.parent_one == OID_TRUNC_ZERO {
+            "".into()
+        } else {
+            format!("parent {}", hex_u128_trunc_to_str(self.parent_one))
+        };
+        let mut parent_str = if self.parent_two == OID_TRUNC_ZERO {
+            parent_str
+        } else {
+            format!("{}\nparent {}", parent_str, hex_u128_trunc_to_str(self.parent_two))
+        };
+        for parent in self.extra_parents.iter() {
+            parent_str = format!("{}\nparent {}", parent_str, hex_u128_trunc_to_str(*parent));
+        }
+        write!(f, "{}\n\n{}", parent_str, self.message)
+    }
+}
+
+impl Display for CommitOnlyParentsOidTrunc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let parent_str = if self.parent_one == OID_TRUNC_ZERO {
+            "".into()
+        } else {
+            format!("parent {}", hex_u128_trunc_to_str(self.parent_one))
+        };
+        let mut parent_str = if self.parent_two == OID_TRUNC_ZERO {
+            parent_str
+        } else {
+            format!("{}\nparent {}", parent_str, hex_u128_trunc_to_str(self.parent_two))
+        };
+        for parent in self.extra_parents.iter() {
+            parent_str = format!("{}\nparent {}", parent_str, hex_u128_trunc_to_str(*parent));
+        }
+        write!(f, "{}\n\n", parent_str)
     }
 }
 
@@ -379,6 +431,37 @@ impl ParseCommit for CommitOnlyParentsAndMessage {
     }
 }
 
+impl ParseCommit for CommitOnlyParentsAndMessageOidTrunc {
+    fn parse_inner(
+        raw: &[u8],
+        current_index: &mut usize
+    ) -> io::Result<Self> where Self: Sized {
+        let only_parents = CommitOnlyParentsOidTrunc::parse_inner(raw, current_index)?;
+        let _ = parse_author(raw, current_index, false)?;
+        let _ = parse_committer(raw, current_index, false)?;
+        let rest_of_data = &raw[*current_index..];
+        // for the only message mode, we wish to only allocate for the
+        // first part of the commit message, so we read up to
+        // the first newline we find. if we don't find the newline, then
+        // we take everything:
+        let message = if let Some(newline_index) = rest_of_data.iter().position(|b| *b == b'\n') {
+            let commit_message_raw = &rest_of_data[0..newline_index];
+            String::from_utf8_lossy(commit_message_raw)
+        } else {
+            let commit_message_raw = &rest_of_data[0..];
+            String::from_utf8_lossy(commit_message_raw)
+        };
+        // TODO: can we parse merge tags faster?
+        let obj = Self {
+            parent_one: only_parents.parent_one,
+            parent_two: only_parents.parent_two,
+            extra_parents: only_parents.extra_parents,
+            message: message.to_string(),
+        };
+        Ok(obj)
+    }
+}
+
 impl ParseCommit for CommitFullMessageAndDescription {
     fn parse_inner(
         raw: &[u8],
@@ -488,6 +571,45 @@ impl ParseCommit for CommitOnlyParents {
         // now, we loop, and add a potentially arbitrary number of parents:
         loop {
             if let Some(parent) = parse_parent(raw, curr)? {
+                out.extra_parents.push(parent);
+            } else {
+                // No extra parent, we are done parsing:
+                break;
+            }
+        }
+
+        Ok(out)
+    }
+}
+
+impl ParseCommit for CommitOnlyParentsOidTrunc {
+    fn parse_inner(
+        raw: &[u8],
+        curr: &mut usize
+    ) -> io::Result<Self> where Self: Sized {
+        let mut out = Self::default();
+        let (_, next_index) = parse_tree(raw, false)?;
+        *curr = next_index;
+
+        // is there a parent?
+        let parent_option = parse_parent_oid_trunc(raw, curr)?;
+        if let Some(parent) = parent_option {
+            out.parent_one = parent;
+        } else {
+            return Ok(out);
+        }
+
+        // Yes, we found first parent, but what about second parent?
+        let parent_option = parse_parent_oid_trunc(raw, curr)?;
+        if let Some(parent) = parent_option {
+            out.parent_two = parent;
+        } else {
+            return Ok(out);
+        }
+
+        // now, we loop, and add a potentially arbitrary number of parents:
+        loop {
+            if let Some(parent) = parse_parent_oid_trunc(raw, curr)? {
                 out.extra_parents.push(parent);
             } else {
                 // No extra parent, we are done parsing:
@@ -707,6 +829,52 @@ pub fn parse_parent(raw: &[u8], curr_index: &mut usize) -> io::Result<Option<Oid
     let next_index_starts_at = start_index + 7 + 41;
     *curr_index = next_index_starts_at;
     Ok(Some(oid))
+}
+
+pub fn parse_parent_oid_trunc(
+    raw: &[u8], curr_index: &mut usize
+) -> io::Result<Option<OidTruncated>> {
+    // a parent line should be 7 bytes for the string "parent "
+    // and then 40 bytes for the hex chars of the tree oid,
+    // and then 1 byte as the newline. so lets get
+    // 48 bytes to check if this line is valid:
+    // BUT, we need to check if this is a parent line, or the next line
+    // is author, in which case we return Ok(None) because there is no parent
+    // so get the first 7 chars and test if its author or parent:
+    let start_index = *curr_index;
+    let desired_range = start_index..(start_index + 7);
+    let line = raw.get(desired_range)
+        .ok_or_else(|| ioerr!("First line not long enough to contain a parent id"))?;
+    
+    if &line[0..7] == b"author " {
+        // no need to advance the current index
+        // because the caller will then use this index
+        // to look for an author string
+        return Ok(None);
+    }
+    
+    // otherwise, we expect this to be a parent line
+    if &line[0..7] != b"parent " {
+        return ioerre!("Expected first line of commit object to be 'tree '");
+    }
+    // now, lets get the rest of the line, which should just be the hash
+    // and a new line, so 40 + 1 chars:
+    let desired_range = (start_index + 7)..(start_index + 7 + 41);
+    let line = raw.get(desired_range)
+        .ok_or_else(|| ioerr!("First line not long enough to contain a parent id"))?;
+
+    if line[40] != b'\n' {
+        return ioerre!("Expected newline after parent id");
+    }
+    // at this point we are reasonably confident
+    // that we have a valid parent...
+    // remember, we only want 32 chars for the hash:
+    let oid_str = std::str::from_utf8(&line[0..32]).map_err(|e| ioerr!("{}", e))?;
+    let oid_trunc = trunc_oid_from_hex_bytes(oid_str)
+        .ok_or_else(|| ioerr!("Failed to create oid truncated array from oid str: {}", oid_str))?;
+    let next_index_starts_at = start_index + 7 + 41;
+    *curr_index = next_index_starts_at;
+    Ok(Some(oid_trunc))
 }
 
 
