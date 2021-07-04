@@ -104,6 +104,26 @@ pub struct PackFile {
 }
 
 impl PackFile {
+    /// a helper method to very quickly find out the type of an object.
+    /// See documentation for `get_object_type_and_len_at_index`
+    /// for more details.
+    pub fn get_object_type_at_index(
+        &self,
+        index: usize
+    ) -> io::Result<PackFileObjectTypeInner> {
+        let try_read_size = 8;
+        let try_read_range = index..(index + try_read_size);
+        let try_parse_segment = self.mmapped_file.get(try_read_range)
+            .ok_or_else(|| ioerr!("Failed to read packfile at index {}", index))?;
+        // the first byte contains the type at the first
+        // 4 bits, not including the MSB:
+        let type_bits_mask = 0b0111_0000;
+        let first_byte = try_parse_segment[0];
+        let object_type_byte = first_byte & type_bits_mask;
+        let object_type = PackFileObjectTypeInner::try_from(object_type_byte)?;
+        Ok(object_type)
+    }
+
     /// read the pack file starting at index, and try to parse
     /// the object type and length. returns
     /// (pack file object type, length of object, index where raw object starts)
