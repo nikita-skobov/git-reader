@@ -1,8 +1,8 @@
 use std::io;
 
-use git_walker::{ioerr, object_id::{PartialOid, Oid, OidFull, oid_parts_to_full, get_first_byte_of_oid}};
-use git_walker::{object_database::{LightObjectDB, loose::{commit_object_parsing, ParsedObject, ParseObject, blob_object_parsing, tree_object_parsing}, packed, state::{State, MinState}}, ioerre};
-use git_walker::{object_database::{FoundPackedLocation, Location, oidmap_u128::{defaults::{B10, B14}, OidMap}}};
+use git_reader::{ioerr, object_id::{PartialOid, Oid, OidFull, oid_parts_to_full, get_first_byte_of_oid}};
+use git_reader::{object_database::{LightObjectDB, loose::{commit_object_parsing, ParsedObject, ParseObject, blob_object_parsing, tree_object_parsing}, packed, state::{State, MinState}}, ioerre};
+use git_reader::{object_database::{FoundPackedLocation, Location, oidmap_u128::{defaults::{B10, B14}, OidMap}}};
 use packed::{PackFile, IDXFileLight, open_pack_file};
 use io::{Write, stdout, StdoutLock};
 

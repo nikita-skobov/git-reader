@@ -1,5 +1,5 @@
 use std::{path::PathBuf, io, collections::{BTreeMap, HashMap}, convert::TryInto};
-use git_walker::{ioerr, object_database, ioerre, object_id::{hex_u128_to_str, PartialOid, hash_str_to_oid, Oid, full_oid_to_u128_oid}};
+use git_reader::{ioerr, object_database, ioerre, object_id::{hex_u128_to_str, PartialOid, hash_str_to_oid, Oid, full_oid_to_u128_oid}};
 use object_database::{loose::{tree_object_parsing::TreeObject, commit_object_parsing::{ParseCommit, CommitOnlyTreeAndParents}}, packed::{open_pack_file_ex, DATA_STARTS_AT, open_idx_file_light, IDXFileLight, PackFile}};
 use object_database::{LightObjectDB, loose::UnparsedObjectType};
 

@@ -1,4 +1,4 @@
-use git_walker::{object_id::{hash_str_to_oid, hex_u128_to_str, Oid, PartialOid}, object_database, ioerr, ioerre};
+use git_reader::{object_id::{hash_str_to_oid, hex_u128_to_str, Oid, PartialOid}, object_database, ioerr, ioerre};
 use object_database::loose::commit_object_parsing::CommitOnlyTreeAndParents;
 use object_database::{loose::ParsedObject};
 use std::io;

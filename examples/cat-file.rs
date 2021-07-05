@@ -1,6 +1,6 @@
 use std::{path::PathBuf, io, collections::{BTreeMap, BTreeSet}, time::Instant};
-use git_walker::{ioerr, object_id::{hex_u128_to_str, PartialOid, hash_str_to_oid, Oid}};
-use git_walker::{printoid, object_database::{LightObjectDB, FoundObjectLocation, loose::{commit_object_parsing::CommitFull, ParsedObject, UnparsedObject, ParseEverythingBlobStringsLossy}, state::{State, MinState}}, eprintoid, ioerre};
+use git_reader::{ioerr, object_id::{hex_u128_to_str, PartialOid, hash_str_to_oid, Oid}};
+use git_reader::{printoid, object_database::{LightObjectDB, FoundObjectLocation, loose::{commit_object_parsing::CommitFull, ParsedObject, UnparsedObject, ParseEverythingBlobStringsLossy}, state::{State, MinState}}, eprintoid, ioerre};
 
 /// Like git-cat-file, but it defaults to "-p", ie: it just
 /// prints the contents of the object found via its OID.
