@@ -553,7 +553,7 @@ impl ParseCommit for CommitOnlyParents {
         *curr = next_index;
 
         // is there a parent?
-        let parent_option = parse_parent(raw, curr)?;
+        let parent_option = parse_parent_fast(raw, curr)?;
         if let Some(parent) = parent_option {
             out.parent_one = parent;
         } else {
@@ -561,7 +561,7 @@ impl ParseCommit for CommitOnlyParents {
         }
 
         // Yes, we found first parent, but what about second parent?
-        let parent_option = parse_parent(raw, curr)?;
+        let parent_option = parse_parent_fast(raw, curr)?;
         if let Some(parent) = parent_option {
             out.parent_two = parent;
         } else {
@@ -570,7 +570,7 @@ impl ParseCommit for CommitOnlyParents {
 
         // now, we loop, and add a potentially arbitrary number of parents:
         loop {
-            if let Some(parent) = parse_parent(raw, curr)? {
+            if let Some(parent) = parse_parent_fast(raw, curr)? {
                 out.extra_parents.push(parent);
             } else {
                 // No extra parent, we are done parsing:
@@ -825,6 +825,44 @@ pub fn parse_parent(raw: &[u8], curr_index: &mut usize) -> io::Result<Option<Oid
     // that we have a valid parent...
     // remember, we only want 32 chars for the hash:
     let oid_str = std::str::from_utf8(&line[0..32]).map_err(|e| ioerr!("{}", e))?;
+    let oid = Oid::from_str_radix(oid_str, 16).map_err(|e| ioerr!("{}", e))?;
+    let next_index_starts_at = start_index + 7 + 41;
+    *curr_index = next_index_starts_at;
+    Ok(Some(oid))
+}
+
+#[inline(always)]
+pub fn parse_parent_fast(raw: &[u8], curr_index: &mut usize) -> io::Result<Option<Oid>> {
+    // a parent line should be 7 bytes for the string "parent "
+    // and then 40 bytes for the hex chars of the tree oid,
+    // and then 1 byte as the newline. so lets get
+    // 48 bytes to check if this line is valid:
+    // BUT, we need to check if this is a parent line, or the next line
+    // is author, in which case we return Ok(None) because there is no parent
+    // so get the first 7 chars and test if its author or parent:
+    let start_index = *curr_index;
+    let desired_range = start_index..(start_index + 7 + 41);
+    let line = raw.get(desired_range)
+        .ok_or_else(|| ioerr!("First line not long enough to contain a parent id"))?;
+
+    if &line[0..7] == b"author " {
+        // no need to advance the current index
+        // because the caller will then use this index
+        // to look for an author string
+        return Ok(None);
+    }
+    
+    // in the fast variant, we assume that this is a parent line,
+    // so we just get the data that we assume, and we don't
+    // validate.
+
+    // now, lets get the rest of the line, which should just be the hash
+    // and a new line, so 40 + 1 chars:
+    // HOWEVER, in the fast version, we just want to get
+    // the 32 hex chars necessary to read the Oid, so this would be
+    // starting from index 7, getting 32 chars:
+    let desired_range_of_hash = 7..(7 + 32);
+    let oid_str = std::str::from_utf8(&line[desired_range_of_hash]).map_err(|e| ioerr!("{}", e))?;
     let oid = Oid::from_str_radix(oid_str, 16).map_err(|e| ioerr!("{}", e))?;
     let next_index_starts_at = start_index + 7 + 41;
     *curr_index = next_index_starts_at;
