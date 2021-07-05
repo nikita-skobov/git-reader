@@ -11,6 +11,8 @@ use state::{State, IDXState};
 
 pub mod state;
 
+pub mod oidmap_trunc;
+pub mod oidmap_u128;
 
 /// A trait used to see if 2 Oids match.
 /// if both of the Oids are actually Oids then
