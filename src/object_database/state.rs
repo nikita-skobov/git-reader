@@ -45,10 +45,12 @@ pub trait State {
     /// of bytes that is currently in this array.
     /// a simple implementation would be:
     /// ```
+    /// use git_reader::object_database::MAX_PATH_TO_DB_LEN;
+    ///
     /// let my_db_str = "../.git/objects/";
     /// let mut my_arr = [0; MAX_PATH_TO_DB_LEN];
-    /// my_arr[0..my_db_str.len()].copy_from_slice(my_db_str.as_bytes())
-    /// (my_db_str.len(), my_arr)
+    /// my_arr[0..my_db_str.len()].copy_from_slice(my_db_str.as_bytes());
+    /// let ret = (my_db_str.len(), my_arr); // <- return this
     /// ```
     fn get_path_to_db_as_bytes(&self) -> (usize, [u8; MAX_PATH_TO_DB_LEN]);
 

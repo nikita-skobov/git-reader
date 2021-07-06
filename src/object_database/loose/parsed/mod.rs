@@ -22,6 +22,12 @@ use blob_object_parsing::ParseBlob;
 /// See sensible choices of parsing combinations below
 /// (read the source file). Or otherwise, make your own combination by doing:
 /// ```
+/// use git_reader::object_database::loose;
+/// use loose::blob_object_parsing;
+/// use loose::tree_object_parsing;
+/// use loose::commit_object_parsing;
+/// use loose::ParseObject;
+///
 /// pub struct MyCustomParser {}
 /// impl ParseObject for MyCustomParser {
 ///     // here you can choose which parsing types your application needs:
