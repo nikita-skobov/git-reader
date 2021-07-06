@@ -178,7 +178,7 @@ impl ParseTree for TreeObject {
 }
 
 impl ParseTree for TreeNone {
-    fn parse(raw: &[u8]) -> io::Result<Self> where Self: Sized {
+    fn parse(_raw: &[u8]) -> io::Result<Self> where Self: Sized {
         Ok(TreeNone {})
     }
 }

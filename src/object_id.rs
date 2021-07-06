@@ -1,7 +1,5 @@
-
-
 use std::{convert::{TryInto, TryFrom}, io};
-use crate::{ioerre, ioerr};
+use crate::ioerr;
 
 /// NOTE: we represent sha1 hash keys as u128, when they are really
 /// 160 bits. We do this because even at 128 bits the chance of

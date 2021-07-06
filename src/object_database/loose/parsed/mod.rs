@@ -7,7 +7,7 @@ pub mod commit_object_parsing;
 pub mod tree_object_parsing;
 pub mod blob_object_parsing;
 
-use tree_object_parsing::{ParseTree, TreeObject};
+use tree_object_parsing::ParseTree;
 use blob_object_parsing::ParseBlob;
 
 /// A trait thats used to define how you want
