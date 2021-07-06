@@ -665,12 +665,19 @@ pub fn parse_mergetag(
     curr_index: &mut usize
 ) -> io::Result<()> {
     let start_index = *curr_index;
-    let desired_range = start_index..(start_index + 9);
-    let line = raw.get(desired_range)
-        .ok_or_else(|| ioerr!("First line not long enough to contain mergetag string"))?;
-    if &line[0..9] != b"mergetag " && &line[0..6] != b"gpgsig" {
-        return ioerre!("Expected first line of mergetag line to contain 'mergetag' or 'gpgsig'");
-    }
+    // TODO: we can skip the first line.
+    // we know this first line contains something like:
+    // 'mergetag object ff00ff...'
+    // or:
+    // 'gpgsig --BEGIN....'
+    // or:
+    // HG:rename
+    // or something... basically the format is:
+    // line of something, then every line after that has leading spaces.
+    // the parsing out of the leading spaces is generic, and does not
+    // depend on the contents of the first line.
+    // so TODO: set start_index = start_index + first newline index.
+
     // for now we dont do any merge tag parsing, we just want to
     // advance the current index to the end of the merge tag.
     let current_data = &raw[start_index..];
