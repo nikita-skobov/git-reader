@@ -961,4 +961,15 @@ mod tests {
         assert_eq!(obj.extra_parents.len(), 1);
         assert_eq!(obj.extra_parents[0], 4);
     }
+
+    #[test]
+    fn can_parse_mergetags() {
+        let mergetag = include_bytes!("../../../../test_fixtures/mergetag.test");
+        let obj = CommitFullMessageAndDescription::parse(mergetag).unwrap();
+        assert_eq!(obj.message, "This is a merge tag commit message");
+        assert_eq!(obj.parent_one, 2);
+        assert_eq!(obj.parent_two, 3);
+        // TODO: description shouldnt have leading newline...
+        // assert_eq!(obj.description, "Here is the description of this commit.");
+    }
 }
