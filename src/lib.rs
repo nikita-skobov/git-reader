@@ -14,7 +14,7 @@ pub fn get_repository_directory<P: AsRef<Path>>(
     // and use that if one exists.
     let mut search_path = search_path.as_ref().to_path_buf();
     search_path.push(".git/");
-    let search_path = if search_path.is_dir() {
+    let _search_path = if search_path.is_dir() {
         // search_path/.git/ exists, use this
         search_path
     } else {

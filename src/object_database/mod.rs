@@ -1,12 +1,11 @@
 use std::{path::{PathBuf, Path}, io, convert::{TryInto, TryFrom}};
-use crate::{ioerre, object_id::{Oid, PartialOid, full_oid_to_u128_oid, get_first_byte_of_oid, HEX_BYTES, hash_object_file_and_folder, OidFull, oid_full_to_string_no_alloc, full_oid_from_str}, ioerr, fs_helpers};
+use crate::{ioerre, object_id::{Oid, PartialOid, full_oid_to_u128_oid, get_first_byte_of_oid, HEX_BYTES, OidFull, oid_full_to_string_no_alloc}, ioerr, fs_helpers};
 
 pub mod loose;
 use loose::*;
 
 pub mod packed;
 use packed::*;
-use flate2::Decompress;
 use state::{State, IDXState};
 
 pub mod state;

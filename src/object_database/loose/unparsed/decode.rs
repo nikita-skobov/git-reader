@@ -58,9 +58,6 @@ pub fn read_and_extract_header<D: Debug>(
     filename: D,
     decompressor: &mut Decompress,
 ) -> io::Result<FirstReadInfo> {
-    // we expect a git object to contain a zlib header
-    let will_contain_zlib_header = true;
-    
     // only read 2kb at first.
     // this should be guaranteed to contain the header,
     // and for commits/tree objects it should also be enough

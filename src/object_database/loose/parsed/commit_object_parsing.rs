@@ -656,17 +656,28 @@ pub fn parse_author(
 /// for now, I do not care about the merge tag's significance, but
 /// in the future maybe mergetag parsing will be necessary. for now we just
 /// skip over it if we detect it:
+/// NOTE: we also consider a 'gpgsig' to be a mergetag just because
+/// its parsing is the same, ie: all of the content after 'gpgsig' or 'mergetag'
+/// will have a single leading space per line, so we can easily parse until
+/// we no longer find leading spaces.
 pub fn parse_mergetag(
     raw: &[u8],
     curr_index: &mut usize
 ) -> io::Result<()> {
     let start_index = *curr_index;
-    let desired_range = start_index..(start_index + 9);
-    let line = raw.get(desired_range)
-        .ok_or_else(|| ioerr!("First line not long enough to contain mergetag string"))?;
-    if &line[0..9] != b"mergetag " {
-        return ioerre!("Expected first line of mergetag line to contain 'mergetag'");
-    }
+    // TODO: we can skip the first line.
+    // we know this first line contains something like:
+    // 'mergetag object ff00ff...'
+    // or:
+    // 'gpgsig --BEGIN....'
+    // or:
+    // HG:rename
+    // or something... basically the format is:
+    // line of something, then every line after that has leading spaces.
+    // the parsing out of the leading spaces is generic, and does not
+    // depend on the contents of the first line.
+    // so TODO: set start_index = start_index + first newline index.
+
     // for now we dont do any merge tag parsing, we just want to
     // advance the current index to the end of the merge tag.
     let current_data = &raw[start_index..];
@@ -960,5 +971,26 @@ mod tests {
         assert_eq!(obj.parent_two, 3);
         assert_eq!(obj.extra_parents.len(), 1);
         assert_eq!(obj.extra_parents[0], 4);
+    }
+
+    #[test]
+    fn can_parse_mergetags() {
+        let mergetag = include_bytes!("../../../../test_fixtures/mergetag.test");
+        let obj = CommitFullMessageAndDescription::parse(mergetag).unwrap();
+        assert_eq!(obj.message, "This is a merge tag commit message");
+        assert_eq!(obj.parent_one, 2);
+        assert_eq!(obj.parent_two, 3);
+        // TODO: description shouldnt have leading newline...
+        // assert_eq!(obj.description, "Here is the description of this commit.");
+    }
+
+    #[test]
+    fn can_parse_mergetags_that_are_gpgsig() {
+        let mergetag = include_bytes!("../../../../test_fixtures/gpgsig.test");
+        let obj = CommitFullMessageAndDescription::parse(mergetag).unwrap();
+        assert_eq!(obj.message, "this is the commit message of the gpg sig commit object");
+        assert_eq!(obj.parent_one, 1);
+        // TODO: description shouldnt have leading newline...
+        // assert_eq!(obj.description, "This is the description...");
     }
 }
